@@ -1,0 +1,52 @@
+<h2>runHadolint</h2>
+
+<p>
+Runs Hadolint against one or more Dockerfiles without using Docker-in-Docker.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runHadolint(
+    dockerfiles: [
+        'user-service/Dockerfile',
+        'todo-service/Dockerfile',
+        'frontend/Dockerfile'
+    ],
+    configFile: '.hadolint.yaml',
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Validates every Dockerfile path before linting.</li>
+    <li>Fails if a configured Dockerfile does not exist.</li>
+    <li>Uses <code>.hadolint.yaml</code> when present.</li>
+    <li>Fails if an explicitly configured <code>configFile</code> does not exist.</li>
+    <li>Runs Dockerfile checks in parallel.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>dockerfiles</code>:
+        Required list of repository-relative Dockerfile paths.
+    </li>
+    <li>
+        <code>configFile</code>:
+        Optional Hadolint configuration file.
+        Default: <code>.hadolint.yaml</code>.
+    </li>
+    <li>
+        <code>container</code>:
+        Jenkins Kubernetes container name. Default: <code>hadolint</code>.
+    </li>
+    <li>
+        <code>failFast</code>:
+        Whether sibling Dockerfile checks stop after the first failure.
+        For linting, <code>false</code> is usually preferred.
+    </li>
+</ul>

@@ -1,0 +1,49 @@
+<h2>runPythonLinting</h2>
+
+<p>
+Runs Black and Flake8 against one or more Python service directories.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runPythonLinting(
+    targets: [
+        'user-service',
+        'todo-service'
+    ],
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Runs <code>black --check .</code> inside each target directory.</li>
+    <li>Runs <code>flake8 .</code> inside each target directory.</li>
+    <li>Runs targets in parallel.</li>
+    <li>Validates target paths before calling Jenkins <code>dir()</code>.</li>
+    <li>Uses repository config files such as <code>pyproject.toml</code> and <code>.flake8</code>.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>targets</code>:
+        Required list of repository-relative Python service directories.
+    </li>
+    <li>
+        <code>pythonTargets</code>:
+        Backward-compatible alias for <code>targets</code>.
+    </li>
+    <li>
+        <code>container</code>:
+        Jenkins Kubernetes container name. Default: <code>python</code>.
+    </li>
+    <li>
+        <code>failFast</code>:
+        Whether sibling Python lint checks stop after the first failure.
+        For linting, <code>false</code> is usually preferred.
+    </li>
+</ul>

@@ -1,0 +1,54 @@
+<h2>runNodeLinting</h2>
+
+<p>
+Runs Node.js frontend linting for one or more package directories.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runNodeLinting(
+    packageDirs: [
+        'frontend'
+    ],
+    lintScript: 'lint',
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Checks that <code>package.json</code> exists.</li>
+    <li>Checks that <code>package-lock.json</code> exists.</li>
+    <li>Runs <code>npm ci --prefer-offline --no-audit</code>.</li>
+    <li>Runs <code>npm run &lt;lintScript&gt;</code>.</li>
+    <li>Uses the mounted npm cache PVC through <code>NPM_CONFIG_CACHE</code>.</li>
+    <li>Runs package directories in parallel.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>packageDirs</code>:
+        Required list of repository-relative Node package directories.
+    </li>
+    <li>
+        <code>path</code>:
+        Single package directory alias.
+    </li>
+    <li>
+        <code>lintScript</code>:
+        npm script name to run. Default: <code>lint</code>.
+    </li>
+    <li>
+        <code>container</code>:
+        Jenkins Kubernetes container name. Default: <code>node</code>.
+    </li>
+    <li>
+        <code>failFast</code>:
+        Whether sibling Node lint checks stop after the first failure.
+        For linting, <code>false</code> is usually preferred.
+    </li>
+</ul>
