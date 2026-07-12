@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: lint
+spec:
+  serviceAccountName: jenkins
+  automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: ghcr-creds
+  dnsConfig:
+    options:
+      - name: ndots
+        value: "1"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: venv-cache
+      persistentVolumeClaim:
+        claimName: jenkins-venv-cache-pvc
+    - name: npm-cache
+      persistentVolumeClaim:
+        claimName: jenkins-npm-cache-pvc
+    - name: trivy-cache
+      persistentVolumeClaim:
+        claimName: jenkins-trivy-cache-pvc
+  containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:latest
+      args: ['$(JENKINS_SECRET)', '$(JENKINS_NAME)']
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+    - name: python
+      image: ghcr.io/keremar/ci-python-test-runner:py3.11-v1
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      volumeMounts:
+        - name: venv-cache
+          mountPath: /cache/venvs
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+    - name: node
+      image: node:20-alpine
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      env:
+        - name: NPM_CONFIG_CACHE
+          value: /home/node/.npm
+      volumeMounts:
+        - name: npm-cache
+          mountPath: /home/node/.npm
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+    - name: hadolint
+      image: hadolint/hadolint:2.12.0-alpine
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "256Mi"
+          cpu: "500m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+    - name: trivy
+      image: aquasec/trivy:latest
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      volumeMounts:
+        - name: trivy-cache
+          mountPath: /home/jenkins/.cache/trivy
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
