@@ -97,6 +97,7 @@ def call(Map config = [:]) {
                     "COVERAGE_RCFILE=${env.WORKSPACE}/${service.coverageConfig}",
                     "REPORT_DIR=${reportDir}",
                     "PIP_CACHE_DIR=${pipCacheDir}",
+                    "PIP_NO_CACHE_DIR=false",
                     "COVERAGE_THRESHOLD=${service.coverageThreshold == null ? '' : service.coverageThreshold.toString()}"
                 ]) {
                     status = sh(
@@ -112,7 +113,9 @@ def call(Map config = [:]) {
                             rm -rf "$VENV_PATH"
                             python -m venv "$VENV_PATH"
 
-                            "$VENV_PATH/bin/python" -m pip install -r "$WORKSPACE/$REQUIREMENTS_FILE"
+                            "$VENV_PATH/bin/python" -m pip install \
+                                --cache-dir "$PIP_CACHE_DIR" \
+                                -r "$WORKSPACE/$REQUIREMENTS_FILE"
 
                             COVERAGE_FAIL_UNDER=""
                             if [ -n "$COVERAGE_THRESHOLD" ]; then

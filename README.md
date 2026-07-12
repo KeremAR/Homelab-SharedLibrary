@@ -223,6 +223,8 @@ Only pip's download/wheel cache is persistent:
 
 This avoids sharing executable environments between jobs while still speeding up
 dependency installation.
+The Python runner image must not set `PIP_NO_CACHE_DIR=1`; the helper explicitly
+sets `PIP_CACHE_DIR` and passes `--cache-dir` to `pip install`.
 
 The pytest command produces two important files per service:
 

@@ -46,7 +46,7 @@ spec:
           drop:
             - ALL
     - name: python
-      image: ghcr.io/keremar/ci-python-test-runner:py3.11-v1
+      image: ghcr.io/keremar/ci-python-test-runner:py3.11-v2
       imagePullPolicy: IfNotPresent
       command: ["sleep"]
       args: ["infinity"]
