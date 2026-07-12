@@ -1,0 +1,75 @@
+<h2>runUnitTest</h2>
+
+<p>
+Runs Python unit tests for one or more service directories and generates
+coverage reports without using Docker-in-Docker.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runUnitTest(
+    targets: [
+        'user-service',
+        'todo-service'
+    ],
+    requirementsFile: 'requirements.txt',
+    coverageDir: 'coverage-reports',
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Runs <code>pytest</code> for each target directory.</li>
+    <li>Generates Jenkins JUnit XML reports.</li>
+    <li>Generates coverage XML reports for future SonarQube usage.</li>
+    <li>Uses a PVC-backed virtualenv cache instead of Docker test images.</li>
+    <li>Runs service test targets in parallel.</li>
+</ul>
+
+<h3>Cache Behavior</h3>
+
+<ul>
+    <li>Default venv cache path: <code>/cache/venvs</code>.</li>
+    <li>Cache key includes target path, Python minor version, and requirements file hash.</li>
+    <li>Changing <code>requirements.txt</code> automatically creates a fresh cached venv.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>targets</code>:
+        Required list of repository-relative Python service directories.
+    </li>
+    <li>
+        <code>pythonTargets</code>:
+        Backward-compatible alias for <code>targets</code>.
+    </li>
+    <li>
+        <code>services</code>:
+        Backward-compatible list of service maps with a <code>name</code> field.
+    </li>
+    <li>
+        <code>requirementsFile</code>:
+        Repository-relative requirements file. Default: <code>requirements.txt</code>.
+    </li>
+    <li>
+        <code>coverageDir</code>:
+        Repository-relative output directory. Default: <code>coverage-reports</code>.
+    </li>
+    <li>
+        <code>container</code>:
+        Jenkins Kubernetes container name. Default: <code>python</code>.
+    </li>
+    <li>
+        <code>venvCacheDir</code>:
+        Mounted virtualenv cache path. Default: <code>/cache/venvs</code>.
+    </li>
+    <li>
+        <code>failFast</code>:
+        Whether sibling unit test branches stop after the first failure.
+    </li>
+</ul>

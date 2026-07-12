@@ -58,6 +58,7 @@ because they explicitly call `container('python')`, `container('node')`, or
 - `runPythonLinting(targets: [...])` runs `black --check .` and `flake8 .`.
 - `runNodeLinting(packageDirs: [...])` runs `npm ci --prefer-offline --no-audit` and `npm run lint`.
 - `runHadolint(dockerfiles: [...])` runs Hadolint without Docker-in-Docker.
+- `runUnitTest(targets: [...])` runs pytest with JUnit and coverage XML reports.
 
 Set `failFast: false` on lint helpers when you want one build to report as
 many lint errors as possible instead of stopping sibling branches early.
@@ -68,6 +69,11 @@ Project-specific lint policy should live in the application repository:
 - `.flake8` for Flake8
 - `.hadolint.yaml` for Hadolint
 - `package.json` for frontend lint scripts
+
+Python unit tests use a PVC-backed venv cache at `/cache/venvs`. The cache key
+includes the target path, Python minor version, and requirements file hash.
+Coverage reports are written under `coverage-reports/<target>/coverage.xml` so
+they can later be passed to SonarQube.
 
 ## How Python Linting Works
 
