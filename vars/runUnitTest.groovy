@@ -6,123 +6,159 @@ import com.company.jenkins.Validation
  * Run Python unit tests for one or more service directories with coverage.
  *
  * This library runs pytest inside the Jenkins Kubernetes agent's Python
- * container. It does not build Docker test images. Dependencies are installed
- * into a PVC-backed virtualenv cache keyed by target path, Python version, and
- * the requirements file hash.
+ * container. It does not build Docker test images. Each build creates a fresh
+ * virtualenv in the workspace while pip downloads/wheels are cached on a
+ * PVC-backed pip cache.
  *
  * TEST BEHAVIOR:
- * - Runs `pytest` for each target path
+ * - Runs `pytest` for each configured service
  * - Generates JUnit XML for Jenkins test reporting
  * - Generates coverage XML for future SonarQube ingestion
- * - Executes each target path in parallel
+ * - Supports service-specific requirements, test path, coverage config, and threshold
+ * - Executes each service in parallel
  *
  * CACHE BEHAVIOR:
- * - Uses `/cache/venvs` by default
- * - Reuses a venv while requirements.txt and Python minor version stay the same
- * - Creates a new venv automatically when requirements change
+ * - Uses persistent pip cache, not persistent venv cache
+ * - Creates an ephemeral venv under the workspace for each build
+ * - Avoids sharing executable environments between jobs
  *
  * SECURITY:
  * - Validates paths before using them in shell commands
- * - Only repository-relative target and requirements paths are allowed
+ * - Only repository-relative service paths are allowed
  * - Does not use Docker-in-Docker or privileged containers
  *
  * @param config Map containing:
- *   - targets: REQUIRED - List of repository-relative Python service directories
- *   - pythonTargets: Backward-compatible alias for targets
- *   - services: Backward-compatible list of maps with a `name` field
- *   - requirementsFile: Repository-relative requirements file (default: 'requirements.txt')
+ *   - services: REQUIRED - List of service maps
+ *   - requirementsFile: Default requirements file (default: '<service>/requirements-test.txt')
  *   - coverageDir: Repository-relative output directory (default: 'coverage-reports')
  *   - container: Container name to run in (default: 'python')
- *   - venvCacheDir: Mounted venv cache path (default: '/cache/venvs')
+ *   - pipCacheDir: Mounted pip cache path (default: '/cache/pip')
  *   - failFast: Whether parallel branches should fail fast (default: true)
+ *
+ * Service map keys:
+ *   - name: REQUIRED - Service name used for reporting
+ *   - target: Service directory (default: name)
+ *   - requirementsFile: Service requirements file
+ *   - testPath: Path passed to pytest from inside target (default: '.')
+ *   - coverageConfig: Service coverage.py config file (default: '<target>/.coveragerc')
+ *   - coverageThreshold: REQUIRED - Service-specific minimum coverage percentage
  *
  * @example
  * runUnitTest(
- *     targets: ['user-service', 'todo-service'],
- *     requirementsFile: 'requirements.txt',
- *     coverageDir: 'coverage-reports',
+ *     services: [
+ *         [
+ *             name: 'user-service',
+ *             requirementsFile: 'user-service/requirements-test.txt',
+ *             testPath: '.',
+ *             coverageThreshold: 70
+ *         ]
+ *     ],
  *     failFast: false
  * )
  */
 def call(Map config = [:]) {
-    List targets = resolveTargets(config)
-    if (targets.isEmpty()) {
-        error 'runUnitTest requires targets, for example: [targets: ["user-service", "todo-service"]]'
+    if (config.containsKey('coverageThreshold')) {
+        error 'Top-level coverageThreshold is not supported. Set coverageThreshold inside each service map.'
+    }
+
+    List serviceConfigs = config.services ?: []
+    if (serviceConfigs.isEmpty()) {
+        error 'runUnitTest requires services, for example: [services: [[name: "user-service"]]]'
     }
 
     String containerName = config.container ?: 'python'
-    String requirementsFile = Validation.relativePath((config.requirementsFile ?: 'requirements.txt').toString(), 'Python requirements file')
     String coverageDir = Validation.relativePath((config.coverageDir ?: 'coverage-reports').toString(), 'Coverage report directory')
-    String venvCacheDir = (config.venvCacheDir ?: '/cache/venvs').toString()
+    String pipCacheDir = cachePath((config.pipCacheDir ?: '/cache/pip').toString(), 'pipCacheDir')
+    String defaultRequirementsFile = config.requirementsFile?.toString()
     boolean failFast = config.get('failFast', true)
 
-    List safeTargets = Validation.uniqueRelativePaths(targets, 'Python unit test target')
+    List normalizedServices = normalizeServices(
+        serviceConfigs,
+        defaultRequirementsFile
+    )
+
+    validateUniqueServiceNames(normalizedServices)
 
     Map branches = [:]
-    safeTargets.each { safeTarget ->
-        String reportName = safeTarget.replaceAll(/[^A-Za-z0-9_.-]/, '-')
-        String reportDir = "${coverageDir}/${reportName}"
+    normalizedServices.each { service ->
+        String reportDir = "${coverageDir}/${service.reportName}"
 
-        branches["Unit test: ${safeTarget}"] = {
+        branches["Unit test: ${service.name}"] = {
             container(containerName) {
-                if (!fileExists(safeTarget)) {
-                    error "Python unit test target does not exist: ${safeTarget}"
-                }
-
-                if (!fileExists(requirementsFile)) {
-                    error "Python requirements file does not exist: ${requirementsFile}"
-                }
+                validateServiceFiles(service)
 
                 int status = 0
                 withEnv([
-                    "UNIT_TARGET=${safeTarget}",
-                    "REQUIREMENTS_FILE=${requirementsFile}",
+                    "UNIT_SERVICE=${service.name}",
+                    "UNIT_REPORT_NAME=${service.reportName}",
+                    "UNIT_TARGET=${service.target}",
+                    "REQUIREMENTS_FILE=${service.requirementsFile}",
+                    "TEST_PATH=${service.testPath}",
+                    "COVERAGE_RCFILE=${env.WORKSPACE}/${service.coverageConfig}",
                     "REPORT_DIR=${reportDir}",
-                    "VENV_CACHE_DIR=${venvCacheDir}"
+                    "PIP_CACHE_DIR=${pipCacheDir}",
+                    "COVERAGE_THRESHOLD=${service.coverageThreshold == null ? '' : service.coverageThreshold.toString()}"
                 ]) {
                     status = sh(
-                        label: "Pytest: ${safeTarget}",
+                        label: "Pytest: ${service.name}",
                         returnStatus: true,
                         script: '''
                             set -eu
 
-                            mkdir -p "$WORKSPACE/$REPORT_DIR" "$VENV_CACHE_DIR"
+                            rm -rf "$WORKSPACE/$REPORT_DIR"
+                            mkdir -p "$WORKSPACE/$REPORT_DIR" "$WORKSPACE/.venvs" "$PIP_CACHE_DIR"
 
-                            REQ_HASH="$(sha256sum "$WORKSPACE/$REQUIREMENTS_FILE" | awk '{print $1}')"
-                            PY_VER="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-                            VENV_NAME="$(printf '%s-%s-%s' "$UNIT_TARGET" "$PY_VER" "$REQ_HASH" | tr '/ ' '--' | tr -cd 'A-Za-z0-9_.-')"
-                            VENV_PATH="$VENV_CACHE_DIR/$VENV_NAME"
+                            VENV_PATH="$WORKSPACE/.venvs/$UNIT_REPORT_NAME"
+                            rm -rf "$VENV_PATH"
+                            python -m venv "$VENV_PATH"
 
-                            if [ ! -x "$VENV_PATH/bin/python" ]; then
-                                rm -rf "$VENV_PATH.tmp" "$VENV_PATH"
-                                python -m venv "$VENV_PATH.tmp"
-                                "$VENV_PATH.tmp/bin/python" -m pip install --upgrade pip setuptools wheel
-                                "$VENV_PATH.tmp/bin/python" -m pip install -r "$WORKSPACE/$REQUIREMENTS_FILE"
-                                mv "$VENV_PATH.tmp" "$VENV_PATH"
+                            "$VENV_PATH/bin/python" -m pip install -r "$WORKSPACE/$REQUIREMENTS_FILE"
+
+                            COVERAGE_FAIL_UNDER=""
+                            if [ -n "$COVERAGE_THRESHOLD" ]; then
+                                COVERAGE_FAIL_UNDER="--cov-fail-under=$COVERAGE_THRESHOLD"
                             fi
 
+                            cd "$WORKSPACE/$UNIT_TARGET"
+
                             PYTHONPATH="$WORKSPACE/$UNIT_TARGET${PYTHONPATH:+:$PYTHONPATH}" \
-                            "$VENV_PATH/bin/python" -m pytest -p no:cacheprovider "$WORKSPACE/$UNIT_TARGET" \
+                            "$VENV_PATH/bin/python" -m pytest -p no:cacheprovider "$TEST_PATH" \
                                 --junitxml="$WORKSPACE/$REPORT_DIR/junit.xml" \
-                                --cov="$WORKSPACE/$UNIT_TARGET" \
+                                --cov \
                                 --cov-report=xml:"$WORKSPACE/$REPORT_DIR/coverage.xml" \
-                                --cov-report=term-missing
+                                --cov-report=term-missing \
+                                $COVERAGE_FAIL_UNDER
                         '''
                     )
                 }
 
-                junit(
-                    allowEmptyResults: true,
-                    testResults: "${reportDir}/junit.xml"
-                )
+                String junitPath = "${reportDir}/junit.xml"
+                String coveragePath = "${reportDir}/coverage.xml"
+
+                if (fileExists(junitPath)) {
+                    junit(
+                        allowEmptyResults: false,
+                        testResults: junitPath
+                    )
+                } else {
+                    echo "JUnit report was not generated for ${service.name}"
+                }
 
                 archiveArtifacts(
                     allowEmptyArchive: true,
-                    artifacts: "${reportDir}/coverage.xml,${reportDir}/junit.xml"
+                    artifacts: "${reportDir}/*.xml"
                 )
 
+                if (status == 0 && !fileExists(junitPath)) {
+                    error "Tests succeeded but JUnit report is missing for ${service.name}"
+                }
+
+                if (status == 0 && !fileExists(coveragePath)) {
+                    error "Tests succeeded but coverage report is missing for ${service.name}"
+                }
+
                 if (status != 0) {
-                    error "Unit tests failed for ${safeTarget}"
+                    error "Unit tests failed for ${service.name}"
                 }
             }
         }
@@ -131,24 +167,111 @@ def call(Map config = [:]) {
     parallel branches + [failFast: failFast]
 }
 
-private List resolveTargets(Map config) {
-    if (config.targets) {
-        return config.targets
-    }
-
-    if (config.pythonTargets) {
-        return config.pythonTargets
-    }
-
-    if (config.services) {
-        return config.services.collect { service ->
-            if (service instanceof Map) {
-                return service.name
-            }
-
-            return service
+private List normalizeServices(
+    List services,
+    String defaultRequirementsFile
+) {
+    return services.collect { rawService ->
+        if (!(rawService instanceof Map)) {
+            throw new IllegalArgumentException("Unit test service must be a Map: ${rawService}")
         }
+
+        Map service = new LinkedHashMap(rawService)
+
+        String name = service.name?.toString()
+        if (!name) {
+            throw new IllegalArgumentException('Unit test service name cannot be empty')
+        }
+        name = Validation.relativePath(name, 'Unit test service name')
+
+        String target = Validation.relativePath((service.target ?: name).toString(), "Unit test target for ${name}")
+        String testPath = Validation.relativePath((service.testPath ?: '.').toString(), "Unit test path for ${name}")
+        String coverageConfig = Validation.relativePath((service.coverageConfig ?: "${target}/.coveragerc").toString(), "Coverage config for ${name}")
+        String requirementsFile = Validation.relativePath(
+            (service.requirementsFile ?: defaultRequirementsFile ?: "${target}/requirements-test.txt").toString(),
+            "Requirements file for ${name}"
+        )
+        if (!service.containsKey('coverageThreshold')) {
+            throw new IllegalArgumentException("coverageThreshold is required for ${name}")
+        }
+        Integer coverageThreshold = parseRequiredInteger(service.coverageThreshold, "Coverage threshold for ${name}")
+
+        return [
+            name: name,
+            target: target,
+            testPath: testPath,
+            coverageConfig: coverageConfig,
+            requirementsFile: requirementsFile,
+            coverageThreshold: coverageThreshold,
+            reportName: name.replaceAll(/[^A-Za-z0-9_.-]/, '-')
+        ]
+    }
+}
+
+private void validateServiceFiles(Map service) {
+    if (!fileExists(service.target)) {
+        error "Python unit test target does not exist for ${service.name}: ${service.target}"
     }
 
-    return []
+    String resolvedTestPath = service.testPath == '.' ? service.target : "${service.target}/${service.testPath}"
+    if (!fileExists(resolvedTestPath)) {
+        error "Python test path does not exist for ${service.name}: ${resolvedTestPath}"
+    }
+
+    if (!fileExists(service.coverageConfig)) {
+        error "Coverage config does not exist for ${service.name}: ${service.coverageConfig}"
+    }
+
+    if (!fileExists(service.requirementsFile)) {
+        error "Python requirements file does not exist for ${service.name}: ${service.requirementsFile}"
+    }
+}
+
+private void validateUniqueServiceNames(List services) {
+    List names = services.collect { service -> service.name }
+    if (names.size() != names.unique().size()) {
+        throw new IllegalArgumentException("Duplicate unit test service names are not allowed: ${names}")
+    }
+}
+
+private Integer parseOptionalInteger(Object value, String label) {
+    if (value == null || value.toString().trim() == '') {
+        return null
+    }
+
+    if (!(value.toString() ==~ /^[0-9]+$/)) {
+        throw new IllegalArgumentException("${label} must be a non-negative integer: ${value}")
+    }
+
+    Integer parsed = value.toString().toInteger()
+    if (parsed > 100) {
+        throw new IllegalArgumentException("${label} must be between 0 and 100: ${value}")
+    }
+
+    return parsed
+}
+
+private Integer parseRequiredInteger(Object value, String label) {
+    Integer parsed = parseOptionalInteger(value, label)
+    if (parsed == null) {
+        throw new IllegalArgumentException("${label} cannot be empty")
+    }
+
+    return parsed
+}
+
+private String cachePath(String path, String label) {
+    if (!path) {
+        throw new IllegalArgumentException("${label} cannot be empty")
+    }
+
+    if (path.contains('..') || path.startsWith('-')) {
+        throw new IllegalArgumentException("Invalid ${label}: ${path}")
+    }
+
+    if (!(path ==~ /^[A-Za-z0-9._\/-]+$/)) {
+        throw new IllegalArgumentException("Invalid characters in ${label}: ${path}")
+    }
+
+    return path
 }

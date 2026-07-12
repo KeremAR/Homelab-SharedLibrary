@@ -20,7 +20,7 @@ spec:
     seccompProfile:
       type: RuntimeDefault
   volumes:
-    - name: venv-cache
+    - name: pip-cache
       persistentVolumeClaim:
         claimName: jenkins-venv-cache-pvc
     - name: npm-cache
@@ -52,8 +52,8 @@ spec:
       args: ["infinity"]
       tty: true
       volumeMounts:
-        - name: venv-cache
-          mountPath: /cache/venvs
+        - name: pip-cache
+          mountPath: /cache/pip
       resources:
         requests:
           memory: "256Mi"

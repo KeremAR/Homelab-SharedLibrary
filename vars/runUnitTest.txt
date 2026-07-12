@@ -9,11 +9,22 @@ coverage reports without using Docker-in-Docker.
 
 <pre>
 runUnitTest(
-    targets: [
-        'user-service',
-        'todo-service'
+    services: [
+        [
+            name: 'user-service',
+            target: 'user-service',
+            requirementsFile: 'user-service/requirements-test.txt',
+            testPath: '.',
+            coverageThreshold: 70
+        ],
+        [
+            name: 'todo-service',
+            target: 'todo-service',
+            requirementsFile: 'todo-service/requirements-test.txt',
+            testPath: '.',
+            coverageThreshold: 75
+        ]
     ],
-    requirementsFile: 'requirements.txt',
     coverageDir: 'coverage-reports',
     failFast: false
 )
@@ -22,39 +33,34 @@ runUnitTest(
 <h3>Behavior</h3>
 
 <ul>
-    <li>Runs <code>pytest</code> for each target directory.</li>
+    <li>Runs <code>pytest</code> for each configured service.</li>
     <li>Generates Jenkins JUnit XML reports.</li>
     <li>Generates coverage XML reports for future SonarQube usage.</li>
-    <li>Uses a PVC-backed virtualenv cache instead of Docker test images.</li>
+    <li>Creates a fresh workspace-local venv on every build.</li>
+    <li>Uses persistent pip download/wheel cache through <code>PIP_CACHE_DIR</code>.</li>
     <li>Runs service test targets in parallel.</li>
+    <li>Fails if tests pass but JUnit or coverage XML is missing.</li>
 </ul>
 
 <h3>Cache Behavior</h3>
 
 <ul>
-    <li>Default venv cache path: <code>/cache/venvs</code>.</li>
-    <li>Cache key includes target path, Python minor version, and requirements file hash.</li>
-    <li>Changing <code>requirements.txt</code> automatically creates a fresh cached venv.</li>
+    <li>Default pip cache path: <code>/cache/pip</code>.</li>
+    <li>The virtualenv is ephemeral and lives under <code>$WORKSPACE/.venvs</code>.</li>
+    <li>Persistent cache stores pip downloads/wheels, not executable environments.</li>
 </ul>
 
-<h3>Parameters</h3>
+<h3>Top-Level Parameters</h3>
 
 <ul>
     <li>
-        <code>targets</code>:
-        Required list of repository-relative Python service directories.
-    </li>
-    <li>
-        <code>pythonTargets</code>:
-        Backward-compatible alias for <code>targets</code>.
-    </li>
-    <li>
         <code>services</code>:
-        Backward-compatible list of service maps with a <code>name</code> field.
+        Required list of service maps.
     </li>
     <li>
         <code>requirementsFile</code>:
-        Repository-relative requirements file. Default: <code>requirements.txt</code>.
+        Optional default requirements file. If omitted, each service defaults to
+        <code>&lt;service&gt;/requirements-test.txt</code>.
     </li>
     <li>
         <code>coverageDir</code>:
@@ -65,11 +71,22 @@ runUnitTest(
         Jenkins Kubernetes container name. Default: <code>python</code>.
     </li>
     <li>
-        <code>venvCacheDir</code>:
-        Mounted virtualenv cache path. Default: <code>/cache/venvs</code>.
+        <code>pipCacheDir</code>:
+        Mounted pip cache path. Default: <code>/cache/pip</code>.
     </li>
     <li>
         <code>failFast</code>:
         Whether sibling unit test branches stop after the first failure.
     </li>
+</ul>
+
+<h3>Service Parameters</h3>
+
+<ul>
+    <li><code>name</code>: Required service name used for reporting.</li>
+    <li><code>target</code>: Service directory. Default: <code>name</code>.</li>
+    <li><code>requirementsFile</code>: Service-specific requirements file.</li>
+    <li><code>testPath</code>: Path passed to pytest from inside the service directory. Default: <code>.</code>.</li>
+    <li><code>coverageConfig</code>: Service coverage.py config file. Default: <code>&lt;target&gt;/.coveragerc</code>.</li>
+    <li><code>coverageThreshold</code>: Required service-specific minimum coverage percentage.</li>
 </ul>
