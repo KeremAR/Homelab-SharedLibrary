@@ -77,8 +77,8 @@ class Validation implements Serializable {
             throw new IllegalArgumentException("${label} cannot be empty")
         }
 
-        if (value.contains('..') || value.startsWith('-')) {
-            throw new IllegalArgumentException("Invalid ${label}: ${value}")
+        if (value.startsWith('/') || value.contains('..') || value.startsWith('-')) {
+            throw new IllegalArgumentException("Only repository-relative glob patterns are allowed for ${label}: ${value}")
         }
 
         if (!(value ==~ SAFE_GLOB_PATTERN)) {
