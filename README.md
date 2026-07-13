@@ -209,6 +209,53 @@ fail if tests passed but coverage.xml is missing
 fail the branch if pytest returned non-zero
 ```
 
+### Why Unit Test Has Helper Functions
+
+The unit test helper has more private helper functions than linting helpers
+because it manages a full test contract, not only a single command. Linting can
+mostly validate a path and run `black`, `flake8`, or `hadolint`; unit testing
+also needs service metadata, dependency files, coverage configuration,
+thresholds, report paths, cache paths, and Jenkins test publishing.
+
+The helper functions run in this order:
+
+```text
+cachePath
+normalizeServices
+parseRequiredInteger
+validateUniqueServiceNames
+validateServiceFiles
+```
+
+`cachePath` validates the pip cache path before it is passed into the shell. It
+matters only because `pipCacheDir` is configurable. If the helper always
+hard-coded `/cache/pip`, this function could be removed.
+
+`normalizeServices` converts each Jenkinsfile service map into one consistent
+internal structure. It fills defaults such as `target`, `testPath`,
+`coverageConfig`, `requirementsFile`, and `reportName`. Without it, the main
+pipeline code would need to repeat that defaulting logic inline, or every
+Jenkinsfile would need to provide every field perfectly.
+
+`parseRequiredInteger` is called while services are normalized and makes
+`coverageThreshold` explicit and safe. Without it, empty, non-numeric, or
+out-of-range values could produce confusing pytest errors, or accidentally
+remove the coverage gate.
+
+`validateUniqueServiceNames` prevents duplicate service names before Jenkins
+parallel branches are created. Without it, two services with the same name could
+overwrite each other in the `parallel` map and also collide on report and venv
+directories such as `coverage-reports/<service>` and `.venvs/<service>`.
+
+`validateServiceFiles` checks that the service directory, test path,
+requirements file, and service `.coveragerc` exist before running expensive
+commands. Without it, the build would usually still fail, but later and with
+less useful errors from `pip`, `pytest`, or missing report files.
+
+These checks are mostly guardrails, but they prevent silent CI mistakes. The
+most important ones to keep are service normalization, duplicate service
+detection, file existence checks, and coverage threshold validation.
+
 The venv is intentionally ephemeral:
 
 ```text
@@ -293,4 +340,147 @@ The helper still fails the branch explicitly:
 if (status != 0) {
   error "Unit tests failed for ${service.name}"
 }
+```
+
+## How Static Security Scanning Works
+
+The application repository runs source-level security scans after unit tests:
+
+```groovy
+stage('Prepare Security Scanner') {
+  steps {
+    ensureTrivyDB()
+  }
+}
+
+stage('Static Security Scan') {
+  parallel {
+    stage('Dependencies') {
+      steps {
+        runTrivyFSScan(
+          target: '.',
+          skipDirs: securityConfig.trivySkipDirs,
+          failOnVulnerabilities: true
+        )
+      }
+    }
+
+    stage('Secrets') {
+      steps {
+        runTrivySecretScan(
+          target: '.',
+          skipDirs: securityConfig.trivySkipDirs,
+          failOnSecrets: true
+        )
+      }
+    }
+  }
+}
+```
+
+The helpers run directly in the Jenkins agent pod's `trivy` container. They do
+not use Docker-in-Docker or `docker run`.
+
+`ensureTrivyDB()` prepares the persistent Trivy database cache:
+
+```text
+/home/jenkins/.cache/trivy
+```
+
+This path is backed by `jenkins-trivy-cache-pvc`, so the DB survives across
+short-lived Jenkins agent pods. By default, `ensureTrivyDB()` checks whether a
+DB already exists and skips downloading if it does. To force a refresh:
+
+```groovy
+ensureTrivyDB(forceUpdate: true)
+```
+
+The current default is intentionally conservative: feature branch builds do not
+download a fresh vulnerability DB on every push. A scheduled Jenkins job, a
+main-branch job, or a manual run can use `forceUpdate: true` when fresher DB data
+is needed. When the DB is updated, the same source code can start failing if a
+new CVE is added for one of its dependencies.
+
+Each scan uses an isolated copy of the persistent cache:
+
+```text
+persistent PVC cache
+  /home/jenkins/.cache/trivy
+
+workspace scan copy
+  $WORKSPACE/.trivy-cache-fs-<uuid>
+  $WORKSPACE/.trivy-cache-secret-<uuid>
+  $WORKSPACE/.trivy-cache-iac-<uuid>
+```
+
+The scan helpers copy the persistent cache into a workspace-local cache and run
+Trivy with `--skip-db-update`:
+
+```bash
+cp -a "$TRIVY_SOURCE_CACHE"/. "$TRIVY_ISOLATED_CACHE"/
+trivy fs --skip-db-update --cache-dir "$TRIVY_ISOLATED_CACHE" ...
+```
+
+This keeps parallel scans from writing to the same DB/cache files at the same
+time. The persistent cache is the shared source of truth; the isolated cache is
+a temporary per-scan working copy. The `finally` block removes only the
+workspace-local isolated copy:
+
+```bash
+rm -rf "$TRIVY_ISOLATED_CACHE"
+```
+
+It does not delete the PVC-backed persistent DB.
+
+`runTrivyFSScan` scans dependency manifests and lock files for vulnerabilities:
+
+```groovy
+runTrivyFSScan(
+  target: '.',
+  severities: 'HIGH,CRITICAL',
+  failOnVulnerabilities: true
+)
+```
+
+`failOnVulnerabilities` controls Trivy's `--exit-code`:
+
+```text
+true  -> findings at the selected severities return exit code 1 and fail Jenkins
+false -> findings are reported, but Trivy returns exit code 0
+```
+
+`runTrivySecretScan` scans source files for committed secrets:
+
+```groovy
+runTrivySecretScan(
+  target: '.',
+  severities: 'HIGH,CRITICAL',
+  failOnSecrets: true
+)
+```
+
+`runTrivyIaCscan` exists for repositories that contain Kubernetes manifests,
+Helm charts, Terraform, or similar infrastructure files. The app source repo no
+longer calls it because manifests now live in a separate infrastructure/config
+repository. Use it in that repo instead:
+
+```groovy
+runTrivyIaCscan(
+  targets: ['3-DeployWithManifests', 'helm-charts/manifests'],
+  failOnIssues: true
+)
+```
+
+For the application repo, the static security stage should normally include:
+
+```text
+ensureTrivyDB
+runTrivyFSScan
+runTrivySecretScan
+```
+
+For the infrastructure/config repo, add:
+
+```text
+runTrivyIaCscan
 ```
