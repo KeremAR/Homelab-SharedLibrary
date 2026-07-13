@@ -21,6 +21,7 @@ package com.company.jenkins
  */
 class Validation implements Serializable {
     private static final String RELATIVE_PATH_PATTERN = /^[A-Za-z0-9._\/-]+$/
+    private static final String SAFE_GLOB_PATTERN = /^[A-Za-z0-9._*?\/-]+$/
     private static final String NPM_SCRIPT_PATTERN = /^[A-Za-z0-9:_-]+$/
 
     static String relativePath(String path, String label = 'path') {
@@ -69,6 +70,34 @@ class Validation implements Serializable {
         }
 
         return paths
+    }
+
+    static String safeGlob(String value, String label = 'glob') {
+        if (!value) {
+            throw new IllegalArgumentException("${label} cannot be empty")
+        }
+
+        if (value.contains('..') || value.startsWith('-')) {
+            throw new IllegalArgumentException("Invalid ${label}: ${value}")
+        }
+
+        if (!(value ==~ SAFE_GLOB_PATTERN)) {
+            throw new IllegalArgumentException("Invalid characters in ${label}: ${value}")
+        }
+
+        return value
+    }
+
+    static List<String> uniqueSafeGlobs(List values, String label = 'glob') {
+        List<String> globs = values.collect { value ->
+            safeGlob(value.toString(), label)
+        }
+
+        if (globs.size() != globs.unique().size()) {
+            throw new IllegalArgumentException("Duplicate ${label} values are not allowed: ${globs}")
+        }
+
+        return globs
     }
 
     static String shellQuote(String value) {

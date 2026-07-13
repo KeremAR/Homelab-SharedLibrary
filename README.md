@@ -388,18 +388,24 @@ not use Docker-in-Docker or `docker run`.
 ```
 
 This path is backed by `jenkins-trivy-cache-pvc`, so the DB survives across
-short-lived Jenkins agent pods. By default, `ensureTrivyDB()` checks whether a
-DB already exists and skips downloading if it does. To force a refresh:
+short-lived Jenkins agent pods. `ensureTrivyDB()` runs Trivy's DB update command
+on every pipeline run and lets Trivy decide whether the local DB is already
+fresh. If the DB is current, Trivy reuses it. If it is stale or missing, Trivy
+updates it. When the DB is updated, the same source code can start failing if a
+new CVE is added for one of its dependencies.
+
+DB updates are wrapped with Jenkins' Lockable Resources Plugin:
 
 ```groovy
-ensureTrivyDB(forceUpdate: true)
+lock(resource: 'trivy-db-cache') {
+  trivy image --download-db-only ...
+}
 ```
 
-The current default is intentionally conservative: feature branch builds do not
-download a fresh vulnerability DB on every push. A scheduled Jenkins job, a
-main-branch job, or a manual run can use `forceUpdate: true` when fresher DB data
-is needed. When the DB is updated, the same source code can start failing if a
-new CVE is added for one of its dependencies.
+This means concurrent Jenkins jobs share the same PVC cache safely: one job
+updates the DB while the others wait for the Jenkins lock instead of racing on
+the same cache files. The Jenkins controller must have the `lockable-resources`
+plugin installed for this helper.
 
 Each scan uses an isolated copy of the persistent cache:
 
@@ -407,24 +413,25 @@ Each scan uses an isolated copy of the persistent cache:
 persistent PVC cache
   /home/jenkins/.cache/trivy
 
-workspace scan copy
-  $WORKSPACE/.trivy-cache-fs-<uuid>
-  $WORKSPACE/.trivy-cache-secret-<uuid>
-  $WORKSPACE/.trivy-cache-iac-<uuid>
+temporary scan copy
+  /tmp/trivy-fs-<uuid>
+  /tmp/trivy-iac-<uuid>
 ```
 
-The scan helpers copy the persistent cache into a workspace-local cache and run
-Trivy with `--skip-db-update`:
+The vulnerability and IaC helpers copy the persistent cache into a temporary
+cache outside the workspace and run Trivy with `--skip-db-update`:
 
 ```bash
-cp -a "$TRIVY_SOURCE_CACHE"/. "$TRIVY_ISOLATED_CACHE"/
+cp -R "$TRIVY_SOURCE_CACHE"/<trivy-cache-files> "$TRIVY_ISOLATED_CACHE"/
 trivy fs --skip-db-update --cache-dir "$TRIVY_ISOLATED_CACHE" ...
 ```
 
 This keeps parallel scans from writing to the same DB/cache files at the same
 time. The persistent cache is the shared source of truth; the isolated cache is
-a temporary per-scan working copy. The `finally` block removes only the
-workspace-local isolated copy:
+a temporary per-scan working copy. The copy is outside `$WORKSPACE`, so Trivy
+does not recursively scan its own DB/cache files. The copy step does not preserve
+file ownership and skips `lost+found`, which avoids non-root PVC ownership
+warnings. The `finally` block removes only the temporary isolated copy:
 
 ```bash
 rm -rf "$TRIVY_ISOLATED_CACHE"
@@ -432,15 +439,26 @@ rm -rf "$TRIVY_ISOLATED_CACHE"
 
 It does not delete the PVC-backed persistent DB.
 
+Secret scanning does not use the Trivy vulnerability DB. It scans source files
+with built-in secret rules, so `runTrivySecretScan` does not create an isolated
+cache and does not use `--skip-db-update`.
+
 `runTrivyFSScan` scans dependency manifests and lock files for vulnerabilities:
 
 ```groovy
 runTrivyFSScan(
   target: '.',
   severities: 'HIGH,CRITICAL',
+  filePatterns: ['pip:requirements-.*\\.txt'],
+  includeDevDeps: true,
   failOnVulnerabilities: true
 )
 ```
+
+The `filePatterns` option is important for this repo because backend services
+use `requirements-test.txt`; Trivy's default pip discovery focuses on standard
+requirements filenames. `includeDevDeps: true` includes frontend development and
+build-time dependencies from npm lock files.
 
 `failOnVulnerabilities` controls Trivy's `--exit-code`:
 
@@ -454,10 +472,13 @@ false -> findings are reported, but Trivy returns exit code 0
 ```groovy
 runTrivySecretScan(
   target: '.',
-  severities: 'HIGH,CRITICAL',
+  severities: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL',
   failOnSecrets: true
 )
 ```
+
+Secret scan defaults include all severities, because even low-severity secret
+findings should be reviewed.
 
 `runTrivyIaCscan` exists for repositories that contain Kubernetes manifests,
 Helm charts, Terraform, or similar infrastructure files. The app source repo no

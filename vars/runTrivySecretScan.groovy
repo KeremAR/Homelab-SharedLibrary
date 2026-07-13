@@ -1,33 +1,34 @@
 #!/usr/bin/env groovy
 
+import com.company.jenkins.TrivyValidation
 import com.company.jenkins.Validation
 
 /**
  * Run Trivy secret scanning against repository files.
  *
- * This is a source-level scan for accidentally committed credentials and tokens.
- * It uses an isolated copy of the persistent Trivy cache so it can run in
- * parallel with other Trivy scans.
+ * Secret scanning does not need the Trivy vulnerability DB. It scans plaintext
+ * source files with Trivy's built-in secret rules.
  *
  * @param config Map containing:
  *   - target: Repository-relative path to scan (default: '.')
- *   - severities: CSV severity list (default: 'HIGH,CRITICAL')
- *   - failOnSecrets: Fail build when secrets are found (default: true)
+ *   - severities: CSV severity list (default: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL')
+ *   - failOnSecrets: Fail build when matching secrets are found (default: true)
  *   - timeout: Trivy timeout (default: '10m')
- *   - skipDirs: Repository-relative directories to skip
- *   - cacheDir: Persistent Trivy cache path (default: '/home/jenkins/.cache/trivy')
+ *   - skipDirs: Repository-relative glob directories to skip
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
  */
 def call(Map config = [:]) {
     String target = Validation.relativePath((config.target ?: '.').toString(), 'Trivy secret scan target')
-    String severities = trivyCsv((config.severities ?: 'HIGH,CRITICAL').toString(), 'Trivy severities')
+    String severities = TrivyValidation.severities(
+        (config.severities ?: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL').toString(),
+        'Trivy secret severities'
+    )
     boolean failBuild = config.get('failOnSecrets', true)
-    String timeout = trivyTimeout((config.timeout ?: '10m').toString(), 'Trivy timeout')
-    List skipDirs = Validation.uniqueRelativePaths(
-        config.skipDirs ?: ['node_modules', '.venvs', 'venv', '.git', '__pycache__', 'coverage-reports'],
+    String timeout = TrivyValidation.timeout((config.timeout ?: '10m').toString(), 'Trivy timeout')
+    List skipDirs = Validation.uniqueSafeGlobs(
+        config.skipDirs ?: ['**/node_modules', '**/.venv', '**/.venvs', '**/venv', '**/__pycache__', '.git', 'coverage-reports'],
         'Trivy skip directory'
     )
-    String cacheDir = trivyCachePath((config.cacheDir ?: '/home/jenkins/.cache/trivy').toString(), 'Trivy cache directory')
     String containerName = config.container ?: 'trivy'
     int exitCode = failBuild ? 1 : 0
     String skipDirFlags = skipDirs.collect { dir -> "--skip-dirs ${Validation.shellQuote(dir)}" }.join(' ')
@@ -37,73 +38,21 @@ def call(Map config = [:]) {
             error "Trivy secret scan target does not exist: ${target}"
         }
 
-        String isolatedCacheDir = ".trivy-cache-secret-${UUID.randomUUID().toString()}"
-
-        withEnv([
-            "TRIVY_SOURCE_CACHE=${cacheDir}",
-            "TRIVY_ISOLATED_CACHE=${env.WORKSPACE}/${isolatedCacheDir}",
-            "TRIVY_TARGET=${target}"
-        ]) {
-            try {
-                sh(
-                    label: "Trivy secret scan: ${target}",
-                    script: """
-                        set -eu
-                        mkdir -p "\$TRIVY_ISOLATED_CACHE"
-                        if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
-                            cp -a "\$TRIVY_SOURCE_CACHE"/. "\$TRIVY_ISOLATED_CACHE"/
-                        fi
-
-                        cd "\$WORKSPACE"
-                        trivy fs \\
-                            --skip-db-update \\
-                            --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                            ${skipDirFlags} \\
-                            --exit-code ${exitCode} \\
-                            --severity ${Validation.shellQuote(severities)} \\
-                            --scanners secret \\
-                            --timeout ${Validation.shellQuote(timeout)} \\
-                            "\$TRIVY_TARGET"
-                    """
-                )
-            } finally {
-                sh(
-                    label: "Clean Trivy secret cache: ${target}",
-                    script: 'set -eu\nrm -rf "$TRIVY_ISOLATED_CACHE"'
-                )
-            }
+        withEnv(["TRIVY_TARGET=${target}"]) {
+            sh(
+                label: "Trivy secret scan: ${target}",
+                script: """
+                    set -eu
+                    cd "\$WORKSPACE"
+                    trivy fs \\
+                        ${skipDirFlags} \\
+                        --exit-code ${exitCode} \\
+                        --severity ${Validation.shellQuote(severities)} \\
+                        --scanners secret \\
+                        --timeout ${Validation.shellQuote(timeout)} \\
+                        "\$TRIVY_TARGET"
+                """
+            )
         }
     }
-}
-
-private String trivyCsv(String value, String label) {
-    if (!value || !(value ==~ /^[A-Z,]+$/)) {
-        throw new IllegalArgumentException("Invalid ${label}: ${value}")
-    }
-
-    return value
-}
-
-private String trivyTimeout(String value, String label) {
-    if (!value || !(value ==~ /^[0-9]+[smh]$/)) {
-        throw new IllegalArgumentException("Invalid ${label}: ${value}")
-    }
-
-    return value
-}
-
-private String trivyCachePath(String path, String label) {
-    if (!path) {
-        throw new IllegalArgumentException("${label} cannot be empty")
-    }
-
-    if (path.contains('..') || path.startsWith('-')) {
-        throw new IllegalArgumentException("Invalid ${label}: ${path}")
-    }
-
-    if (!(path ==~ /^[A-Za-z0-9._\/-]+$/)) {
-        throw new IllegalArgumentException("Invalid characters in ${label}: ${path}")
-    }
-
-    return path
 }

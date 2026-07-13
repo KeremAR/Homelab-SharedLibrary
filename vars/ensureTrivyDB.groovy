@@ -1,62 +1,43 @@
 #!/usr/bin/env groovy
 
+import com.company.jenkins.TrivyValidation
+
 /**
- * Ensure the Trivy vulnerability database exists in the persistent cache.
+ * Ensure the Trivy vulnerability database in the persistent cache is current.
  *
- * The Jenkins Kubernetes agent mounts the Trivy cache PVC into the `trivy`
- * container. This helper updates that persistent cache once, then scan helpers
- * copy it into isolated workspace-local cache directories before running.
+ * The helper always lets Trivy perform its own DB freshness check. If the DB is
+ * current, Trivy reuses it. If it is stale or missing, Trivy updates it.
  *
  * @param config Map containing:
- *   - forceUpdate: Force database update (default: false)
  *   - cacheDir: Persistent Trivy cache path (default: '/home/jenkins/.cache/trivy')
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
+ *   - lockResource: Jenkins lockable resource name (default: 'trivy-db-cache')
  */
 def call(Map config = [:]) {
-    boolean forceUpdate = config.get('forceUpdate', false)
-    String cacheDir = trivyCachePath((config.cacheDir ?: '/home/jenkins/.cache/trivy').toString(), 'Trivy cache directory')
+    String cacheDir = TrivyValidation.cachePath((config.cacheDir ?: '/home/jenkins/.cache/trivy').toString(), 'Trivy cache directory')
     String containerName = config.container ?: 'trivy'
+    String lockResource = lockResourceName((config.lockResource ?: 'trivy-db-cache').toString())
 
-    container(containerName) {
-        withEnv(["TRIVY_CACHE_DIR=${cacheDir}"]) {
-            int dbExists = sh(
-                label: 'Check Trivy DB cache',
-                returnStatus: true,
-                script: '''
-                    set -eu
-                    test -f "$TRIVY_CACHE_DIR/db/trivy.db" || test -f "$TRIVY_CACHE_DIR/db/metadata.json"
-                '''
-            )
-
-            if (dbExists == 0 && !forceUpdate) {
-                echo "Trivy vulnerability database already exists in ${cacheDir}."
-                return
+    lock(resource: lockResource) {
+        container(containerName) {
+            withEnv(["TRIVY_CACHE_DIR=${cacheDir}"]) {
+                sh(
+                    label: 'Update Trivy DB cache',
+                    script: '''
+                        set -eu
+                        mkdir -p "$TRIVY_CACHE_DIR"
+                        trivy image --download-db-only --quiet --cache-dir "$TRIVY_CACHE_DIR"
+                    '''
+                )
             }
-
-            sh(
-                label: 'Update Trivy DB cache',
-                script: '''
-                    set -eu
-                    mkdir -p "$TRIVY_CACHE_DIR"
-                    trivy image --download-db-only --quiet --cache-dir "$TRIVY_CACHE_DIR"
-                '''
-            )
         }
     }
 }
 
-private String trivyCachePath(String path, String label) {
-    if (!path) {
-        throw new IllegalArgumentException("${label} cannot be empty")
+private String lockResourceName(String value) {
+    if (!value || !(value ==~ /^[A-Za-z0-9_.-]+$/)) {
+        throw new IllegalArgumentException("Invalid Jenkins lock resource name: ${value}")
     }
 
-    if (path.contains('..') || path.startsWith('-')) {
-        throw new IllegalArgumentException("Invalid ${label}: ${path}")
-    }
-
-    if (!(path ==~ /^[A-Za-z0-9._\/-]+$/)) {
-        throw new IllegalArgumentException("Invalid characters in ${label}: ${path}")
-    }
-
-    return path
+    return value
 }
