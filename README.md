@@ -71,6 +71,7 @@ disabled.
 - `runNodeLinting(packageDirs: [...])` runs `npm ci --prefer-offline --no-audit` and `npm run lint`.
 - `runHadolint(dockerfiles: [...])` runs Hadolint without Docker-in-Docker.
 - `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
+- `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
 
 Set `failFast: false` on lint helpers when you want one build to report as
 many lint errors as possible instead of stopping sibling branches early.
@@ -352,6 +353,202 @@ The helper still fails the branch explicitly:
 if (status != 0) {
   error "Unit tests failed for ${service.name}"
 }
+```
+
+## How SonarQube Analysis Works
+
+`runSonarQube` is the Shared Library wrapper around Jenkins' SonarQube plugin
+and scanner tool. SonarQube itself runs in the cluster and stores analysis
+results, issues, quality gates, and coverage data. The scanner runs inside the
+Jenkins pipeline and sends the current workspace analysis to the SonarQube
+server.
+
+Example Jenkinsfile usage:
+
+```groovy
+runSonarQube(
+  projectKey: 'homelab-app',
+  sources: ['user-service', 'todo-service', 'frontend'],
+  coverageReports: [
+    'coverage-reports/user-service/coverage.xml',
+    'coverage-reports/todo-service/coverage.xml'
+  ],
+  fetchIssues: true,
+  fetchIssuesConfig: [
+    severities: ['BLOCKER', 'CRITICAL', 'MAJOR'],
+    statuses: ['OPEN', 'CONFIRMED'],
+    maxIssues: 100
+  ],
+  cpdExclusions: [
+    '**/tests/**'
+  ]
+)
+```
+
+The helper uses these Jenkins-side objects:
+
+```text
+withSonarQubeEnv('sonarqube')
+  injects SonarQube URL and token from Jenkins Global Configuration
+
+tool 'SonarQube Scanner'
+  resolves the Jenkins-managed sonar-scanner installation
+
+waitForQualityGate
+  waits for SonarQube's webhook response after analysis
+```
+
+The helper generates `sonar-project.properties` in the workspace before running
+the scanner. It owns generic properties such as `sonar.projectKey`,
+`sonar.sources`, `sonar.exclusions`, `sonar.python.coverage.reportPaths`, and
+`sonar.cpd.exclusions`. If a project needs extra SonarQube settings, pass them
+through `extraProperties`; do not hardcode project-specific rules in the Shared
+Library.
+
+Coverage reports come from the earlier `runUnitTest` stage:
+
+```text
+coverage-reports/user-service/coverage.xml
+coverage-reports/todo-service/coverage.xml
+```
+
+By default, configured coverage reports must exist. This catches a broken test
+or report path before SonarQube analysis runs without coverage.
+
+`runSonarQube` can also call `fetchSonarQubeIssues` when `fetchIssues: true` is
+set. This is diagnostic: it archives the SonarQube issue API response and prints
+a short summary in the Jenkins log. It does not replace Quality Gate
+enforcement.
+
+SonarQube properties are passed in two ways. Common properties have dedicated
+parameters:
+
+```groovy
+runSonarQube(
+  projectKey: 'homelab-app',
+  sources: ['.'],
+  exclusions: [
+    '**/node_modules/**',
+    '**/test/**',
+    '**/test_*.py',
+    'docker-compose*.yml',
+    'site/**',
+    'docs/**',
+    'custom-images/**'
+  ],
+  coverageReports: [
+    'coverage-reports/user-service/coverage.xml',
+    'coverage-reports/todo-service/coverage.xml'
+  ],
+  cpdExclusions: [
+    '**/verify_token',
+    '**/*service/app.py'
+  ]
+)
+```
+
+Less common or project-specific properties go into `extraProperties`:
+
+```groovy
+runSonarQube(
+  projectKey: 'homelab-app',
+  sources: ['.'],
+  extraProperties: [
+    'sonar.issue.ignore.multicriteria': 'e1,e2',
+    'sonar.issue.ignore.multicriteria.e1.ruleKey': 'docker:S6471',
+    'sonar.issue.ignore.multicriteria.e1.resourceKey': '**/frontend/Dockerfile',
+    'sonar.issue.ignore.multicriteria.e2.ruleKey': 'docker:S4507',
+    'sonar.issue.ignore.multicriteria.e2.resourceKey': '**/custom-images/**'
+  ]
+)
+```
+
+The helper writes these values into `sonar-project.properties` before running
+`sonar-scanner`.
+
+### Why SonarQube Has Helper Functions
+
+The SonarQube helper has several private functions because it builds a
+configuration file and passes user-provided values into scanner commands. The
+extra functions keep the main `call` flow readable and make invalid Jenkinsfile
+configuration fail before the scanner starts.
+
+The helper functions run in this order:
+
+```text
+normalizeConfig
+validateProjectKey
+asList
+Validation.uniqueRelativePaths / Validation.uniqueSafeGlobs
+normalizeExtraProperties
+validateInputFiles
+writeSonarProperties
+parsePositiveInteger
+joinCsv
+```
+
+`normalizeConfig` is the main adapter between the Jenkinsfile and the internal
+settings map. It fills defaults such as `scannerName: 'SonarQube Scanner'`,
+`serverName: 'sonarqube'`, `propertiesFile: 'sonar-project.properties'`, and
+`timeoutMinutes: 15`. Without it, the main pipeline flow would be full of
+defaulting and validation code.
+
+`validateProjectKey` checks that `projectKey` exists and only contains safe
+SonarQube project key characters. Without it, a typo or unsafe value would fail
+later inside the scanner with a less useful error.
+
+`asList` lets callers pass either a single value or a list for list-like
+settings. For example, `sources: 'frontend'` becomes `['frontend']`. Without it,
+a single string could be treated like an unexpected collection shape.
+
+`Validation.uniqueRelativePaths` is used for source paths and coverage reports.
+It rejects absolute paths, parent directory traversal, values starting with
+`-`, invalid characters, and duplicates. Without it, a bad Jenkinsfile path
+could scan the wrong place, fail late, or overwrite another value.
+
+`Validation.uniqueSafeGlobs` is used for SonarQube glob settings such as
+`exclusions`, `cpdExclusions`, and `testInclusions`. It keeps glob patterns
+repository-relative. Without it, project config could accidentally point outside
+the workspace or pass option-looking values.
+
+`normalizeExtraProperties` validates optional custom `sonar.*` properties. It
+also blocks properties that already have first-class helper parameters, such as
+`sonar.sources` or `sonar.projectKey`. Without it, the same property could be
+defined twice and make the final scanner config hard to reason about.
+
+`validatePropertyKey`, `validatePropertyValue`, and `validatePlainValue` protect
+the generated `sonar-project.properties` file. They reject invalid property
+keys and multiline values. Without them, a value containing a newline could
+silently inject another SonarQube property.
+
+`validateInputFiles` checks configured source paths and required coverage
+reports before the scanner runs. Without it, SonarQube could run successfully
+but miss coverage because a report path was wrong.
+
+`writeSonarProperties` creates the actual `sonar-project.properties` file that
+`sonar-scanner` reads. Without it, every Jenkinsfile would need to maintain its
+own SonarQube properties file or inline scanner flags.
+
+`parsePositiveInteger` validates the timeout value. Without it, an empty,
+negative, or very large timeout could create confusing Jenkins behavior.
+
+`defaultExclusions`, `managedPropertyKeys`, and `joinCsv` are small support
+functions. They keep default ignore patterns, protected property names, and
+comma-separated SonarQube values in one place.
+
+`fetchSonarQubeIssues` calls SonarQube's `/api/issues/search` endpoint after
+analysis. It stores the raw JSON as `sonarqube-issues.json`, archives it as a
+Jenkins artifact, and prints a compact issue summary.
+
+The fetch helper is useful when you want quick feedback directly in Jenkins
+logs, especially after a Quality Gate failure. It should stay diagnostic. The
+main pass/fail contract remains:
+
+```text
+scanner sends analysis
+SonarQube evaluates Quality Gate
+waitForQualityGate fails or passes the build
+Jenkins links back to SonarQube for issue details
 ```
 
 ## How Static Security Scanning Works

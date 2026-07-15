@@ -26,7 +26,7 @@ def call(Map config = [:]) {
                     script: '''
                         set -eu
                         mkdir -p "$TRIVY_CACHE_DIR"
-                        trivy image --download-db-only --quiet --cache-dir "$TRIVY_CACHE_DIR"
+                        trivy image --download-db-only --cache-dir "$TRIVY_CACHE_DIR"
                     '''
                 )
             }

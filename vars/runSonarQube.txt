@@ -1,0 +1,65 @@
+<h2>runSonarQube</h2>
+
+<p>
+Runs SonarQube analysis with the Jenkins-managed SonarQube Scanner tool and
+optionally waits for the Quality Gate result.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runSonarQube(
+    projectKey: 'homelab-app',
+    sources: [
+        'user-service',
+        'todo-service',
+        'frontend'
+    ],
+    coverageReports: [
+        'coverage-reports/user-service/coverage.xml',
+        'coverage-reports/todo-service/coverage.xml'
+    ],
+    cpdExclusions: [
+        '**/tests/**'
+    ]
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>projectKey</code>: Required SonarQube project key.</li>
+    <li><code>projectName</code>: Optional SonarQube display name.</li>
+    <li><code>projectVersion</code>: Optional project version.</li>
+    <li><code>scannerName</code>: Jenkins tool name. Default: <code>SonarQube Scanner</code>.</li>
+    <li><code>serverName</code>: Jenkins SonarQube server name. Default: <code>sonarqube</code>.</li>
+    <li><code>sources</code>: Repository-relative source directories. Default: <code>['.']</code>.</li>
+    <li><code>exclusions</code>: SonarQube exclusion globs.</li>
+    <li><code>coverageReports</code>: Python coverage XML report paths.</li>
+    <li><code>requireCoverageReports</code>: Fail if coverage reports are missing. Default: true when coverage reports are configured.</li>
+    <li><code>cpdExclusions</code>: SonarQube duplicate-code exclusion globs.</li>
+    <li><code>testSources</code>: Optional repository-relative test source directories.</li>
+    <li><code>testInclusions</code>: Optional test inclusion globs.</li>
+    <li><code>extraProperties</code>: Optional additional SonarQube properties.</li>
+    <li><code>fetchIssues</code>: Fetch and archive SonarQube issues after analysis. Default: false.</li>
+    <li><code>fetchIssuesConfig</code>: Optional map passed to <code>fetchSonarQubeIssues</code>.</li>
+    <li><code>waitForQualityGate</code>: Wait for Quality Gate result. Default: true.</li>
+    <li><code>abortPipeline</code>: Abort pipeline on failed Quality Gate. Default: true.</li>
+    <li><code>timeoutMinutes</code>: Scan and Quality Gate timeout. Default: 15.</li>
+    <li><code>propertiesFile</code>: Generated properties file. Default: <code>sonar-project.properties</code>.</li>
+    <li><code>container</code>: Optional Kubernetes container name. If omitted, the current/default container is used.</li>
+</ul>
+
+<h3>Notes</h3>
+
+<p>
+The helper uses <code>withSonarQubeEnv(serverName)</code> to inject the
+SonarQube URL and token configured in Jenkins. It uses
+<code>tool scannerName</code> to find the scanner installed by Jenkins.
+</p>
+
+<p>
+Project-specific policy should stay in the application repository or be passed
+from the Jenkinsfile. The shared library only provides the reusable execution
+flow and safety checks.
+</p>
