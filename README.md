@@ -10,6 +10,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 - `node` container for frontend linting
 - `hadolint` container for Dockerfile linting
 - `trivy` container for security scans
+- `jenkins-tools-cache-pvc` mounted at `/home/jenkins/agent/tools` for Jenkins tool installers
 - `jenkins-venv-cache-pvc` mounted at `/cache/pip` for pip downloads/wheels
 - `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
 - `jenkins-trivy-cache-pvc` mounted at `/home/jenkins/.cache/trivy`
@@ -52,6 +53,17 @@ pipeline {
 agent container by default. Lint helpers still run in their own containers
 because they explicitly call `container('python')`, `container('node')`, or
 `container('hadolint')`.
+
+Jenkins auto-installed tools, such as SonarQube Scanner, are cached under:
+
+```text
+/home/jenkins/agent/tools
+```
+
+That path is backed by `jenkins-tools-cache-pvc`, so tool downloads can survive
+new ephemeral Kubernetes agent pods. The PVC is ReadWriteOnce like the other CI
+caches, so it assumes the current single-app CI flow with concurrent builds
+disabled.
 
 ## Lint Helpers
 

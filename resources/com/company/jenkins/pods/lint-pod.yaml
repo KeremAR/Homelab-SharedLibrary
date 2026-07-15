@@ -20,6 +20,9 @@ spec:
     seccompProfile:
       type: RuntimeDefault
   volumes:
+    - name: tools-cache
+      persistentVolumeClaim:
+        claimName: jenkins-tools-cache-pvc
     - name: pip-cache
       persistentVolumeClaim:
         claimName: jenkins-venv-cache-pvc
@@ -33,6 +36,9 @@ spec:
     - name: jnlp
       image: jenkins/inbound-agent:latest
       args: ['$(JENKINS_SECRET)', '$(JENKINS_NAME)']
+      volumeMounts:
+        - name: tools-cache
+          mountPath: /home/jenkins/agent/tools
       resources:
         requests:
           memory: "256Mi"
@@ -52,6 +58,8 @@ spec:
       args: ["infinity"]
       tty: true
       volumeMounts:
+        - name: tools-cache
+          mountPath: /home/jenkins/agent/tools
         - name: pip-cache
           mountPath: /cache/pip
       resources:
@@ -76,6 +84,8 @@ spec:
         - name: NPM_CONFIG_CACHE
           value: /home/node/.npm
       volumeMounts:
+        - name: tools-cache
+          mountPath: /home/jenkins/agent/tools
         - name: npm-cache
           mountPath: /home/node/.npm
       resources:
@@ -115,6 +125,8 @@ spec:
       args: ["infinity"]
       tty: true
       volumeMounts:
+        - name: tools-cache
+          mountPath: /home/jenkins/agent/tools
         - name: trivy-cache
           mountPath: /home/jenkins/.cache/trivy
       resources:
