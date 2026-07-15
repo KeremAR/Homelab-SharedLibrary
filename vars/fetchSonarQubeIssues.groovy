@@ -1,7 +1,6 @@
 #!/usr/bin/env groovy
 
 import com.company.jenkins.Validation
-import groovy.json.JsonSlurper
 
 /**
  * Fetch SonarQube issues from the SonarQube Web API and archive the response.
@@ -29,6 +28,7 @@ import groovy.json.JsonSlurper
  *   - maxIssues: Maximum issues to fetch from the API (default: 100)
  *   - maxIssuesToPrint: Maximum issues to print in Jenkins log (default: 20)
  *   - outputFile: Repository-relative JSON output file (default: 'sonarqube-issues.json')
+ *   - summaryFile: Repository-relative text summary file (default: 'sonarqube-issues-summary.txt')
  *   - archive: Archive outputFile as Jenkins artifact (default: true)
  *   - failOnError: Fail the build if fetching/parsing issues fails (default: false)
  *   - timeoutSeconds: HTTP timeout in seconds (default: 20)
@@ -55,8 +55,10 @@ def call(Map config = [:]) {
             "SONAR_SEVERITIES=${settings.severities}",
             "SONAR_STATUSES=${settings.statuses}",
             "SONAR_MAX_ISSUES=${settings.maxIssues}",
+            "SONAR_MAX_ISSUES_TO_PRINT=${settings.maxIssuesToPrint}",
             "SONAR_TIMEOUT_SECONDS=${settings.timeoutSeconds}",
-            "SONAR_ISSUES_OUTPUT=${settings.outputFile}"
+            "SONAR_ISSUES_OUTPUT=${settings.outputFile}",
+            "SONAR_ISSUES_SUMMARY=${settings.summaryFile}"
         ]) {
             status = sh(
                 label: 'Fetch SonarQube issues',
@@ -102,13 +104,45 @@ except urllib.error.URLError as error:
     sys.exit(1)
 
 try:
-    json.loads(body)
+    payload = json.loads(body)
 except json.JSONDecodeError as error:
     print("SonarQube API response was not valid JSON: %s" % error, file=sys.stderr)
     sys.exit(1)
 
 with open(os.environ["SONAR_ISSUES_OUTPUT"], "w", encoding="utf-8") as output:
     output.write(body)
+
+issues = payload.get("issues", [])
+total = int(payload.get("total", len(issues)))
+limit = min(int(os.environ["SONAR_MAX_ISSUES_TO_PRINT"]), len(issues))
+
+summary_lines = []
+if not issues:
+    summary_lines.append("No SonarQube issues found for %s." % os.environ["SONAR_PROJECT_KEY"])
+else:
+    summary_lines.append(
+        "SonarQube issues found for %s: %s. Showing %s." %
+        (os.environ["SONAR_PROJECT_KEY"], total, limit)
+    )
+
+    for issue in issues[:limit]:
+        component = issue.get("component", "unknown")
+        filename = component.split(":")[-1]
+        line = issue.get("line", "N/A")
+        severity = issue.get("severity", "UNKNOWN")
+        issue_type = issue.get("type", "ISSUE")
+        rule = issue.get("rule", "")
+        message = " ".join(str(issue.get("message", "")).split())
+        summary_lines.append("%s %s %s:%s %s %s" % (severity, issue_type, filename, line, rule, message))
+
+    if total > limit:
+        summary_lines.append(
+            "Download %s from Jenkins artifacts for the full SonarQube issue response." %
+            os.environ["SONAR_ISSUES_OUTPUT"]
+        )
+
+with open(os.environ["SONAR_ISSUES_SUMMARY"], "w", encoding="utf-8") as summary:
+    summary.write("\\n".join(summary_lines) + "\\n")
 PY
                 '''
             )
@@ -127,11 +161,13 @@ PY
         if (settings.archive) {
             archiveArtifacts(
                 allowEmptyArchive: false,
-                artifacts: settings.outputFile
+                artifacts: "${settings.outputFile},${settings.summaryFile}"
             )
         }
 
-        printIssueSummary(settings)
+        if (fileExists(settings.summaryFile)) {
+            echo readFile(settings.summaryFile).trim()
+        }
     }
 
     if (settings.container) {
@@ -159,37 +195,12 @@ private Map normalizeConfig(Map config) {
         maxIssues: parseBoundedInteger(config.maxIssues ?: 100, 'maxIssues', 1, 500),
         maxIssuesToPrint: parseBoundedInteger(config.maxIssuesToPrint ?: 20, 'maxIssuesToPrint', 0, 100),
         outputFile: Validation.relativePath((config.outputFile ?: 'sonarqube-issues.json').toString(), 'SonarQube issues output file'),
+        summaryFile: Validation.relativePath((config.summaryFile ?: 'sonarqube-issues-summary.txt').toString(), 'SonarQube issues summary file'),
         archive: config.get('archive', true) as boolean,
         failOnError: config.get('failOnError', false) as boolean,
         timeoutSeconds: parseBoundedInteger(config.timeoutSeconds ?: 20, 'timeoutSeconds', 1, 120),
         container: config.containsKey('container') ? validateOptionalContainer(config.container) : 'python'
     ]
-}
-
-private void printIssueSummary(Map settings) {
-    Map response = new JsonSlurper().parseText(readFile(settings.outputFile)) as Map
-    List issues = response.issues ?: []
-    Integer total = response.total ?: issues.size()
-
-    if (issues.isEmpty()) {
-        echo "No SonarQube issues found for ${settings.projectKey}."
-        return
-    }
-
-    Integer limit = Math.min(settings.maxIssuesToPrint, issues.size())
-    echo "SonarQube issues found for ${settings.projectKey}: ${total}. Showing ${limit}."
-
-    issues.take(limit).each { issue ->
-        String fileName = issue.component?.toString()?.tokenize(':')?.last() ?: 'unknown'
-        String lineNumber = issue.line ? issue.line.toString() : 'N/A'
-        String message = issue.message?.toString()?.replaceAll(/\s+/, ' ') ?: ''
-
-        echo "${issue.severity ?: 'UNKNOWN'} ${issue.type ?: 'ISSUE'} ${fileName}:${lineNumber} ${issue.rule ?: ''} ${message}"
-    }
-
-    if (total > limit) {
-        echo "Download ${settings.outputFile} from Jenkins artifacts for the full SonarQube issue response."
-    }
 }
 
 private void handleFailure(Map settings, String message) {

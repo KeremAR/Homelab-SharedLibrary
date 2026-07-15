@@ -122,12 +122,17 @@ def call(Map config = [:]) {
                                 COVERAGE_FAIL_UNDER="--cov-fail-under=$COVERAGE_THRESHOLD"
                             fi
 
-                            cd "$WORKSPACE/$UNIT_TARGET"
+                            RESOLVED_TEST_PATH="$UNIT_TARGET"
+                            if [ "$TEST_PATH" != "." ]; then
+                                RESOLVED_TEST_PATH="$UNIT_TARGET/$TEST_PATH"
+                            fi
+
+                            cd "$WORKSPACE"
 
                             PYTHONPATH="$WORKSPACE/$UNIT_TARGET${PYTHONPATH:+:$PYTHONPATH}" \
-                            "$VENV_PATH/bin/python" -m pytest -p no:cacheprovider "$TEST_PATH" \
+                            "$VENV_PATH/bin/python" -m pytest -p no:cacheprovider "$RESOLVED_TEST_PATH" \
                                 --junitxml="$WORKSPACE/$REPORT_DIR/junit.xml" \
-                                --cov \
+                                --cov="$UNIT_TARGET" \
                                 --cov-report=xml:"$WORKSPACE/$REPORT_DIR/coverage.xml" \
                                 --cov-report=term-missing \
                                 $COVERAGE_FAIL_UNDER

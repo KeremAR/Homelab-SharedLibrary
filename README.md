@@ -303,19 +303,22 @@ coverage-reports/todo-service/coverage.xml
 `pytest` is the step that actually runs the tests:
 
 ```bash
-cd user-service
+cd "$WORKSPACE"
 
-python -m pytest . \
+python -m pytest user-service \
   --junitxml=coverage-reports/user-service/junit.xml \
-  --cov \
+  --cov=user-service \
   --cov-report=xml:coverage-reports/user-service/coverage.xml \
   --cov-report=term-missing \
   --cov-fail-under=70
 ```
 
-The source path comes from the service `.coveragerc`; the threshold comes from
-that service's Jenkinsfile `coverageThreshold` value. `runUnitTest` does not
-accept a top-level coverage threshold; every service declares its own threshold.
+The helper runs pytest from the workspace root, not from inside the service
+directory. This makes coverage XML paths repository-relative, such as
+`user-service/app.py`, so SonarQube can match them to scanned source files.
+The coverage threshold comes from that service's Jenkinsfile
+`coverageThreshold` value. `runUnitTest` does not accept a top-level coverage
+threshold; every service declares its own threshold.
 
 The Jenkins `junit(...)` step does not run tests. It reads the `junit.xml` file
 that pytest already created and adds a Test Result section to the Jenkins build.
