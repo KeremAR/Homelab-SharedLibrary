@@ -136,6 +136,43 @@ def call(Map config = [:]) {
                                 --cov-report=xml:"$WORKSPACE/$REPORT_DIR/coverage.xml" \
                                 --cov-report=term-missing \
                                 $COVERAGE_FAIL_UNDER
+
+                            COVERAGE_XML="$WORKSPACE/$REPORT_DIR/coverage.xml"
+                            if [ -f "$COVERAGE_XML" ]; then
+                                python - <<'PY'
+import os
+import xml.etree.ElementTree as ET
+
+workspace = os.environ["WORKSPACE"]
+target = os.environ["UNIT_TARGET"].strip("/")
+coverage_xml = os.path.join(workspace, os.environ["REPORT_DIR"], "coverage.xml")
+
+tree = ET.parse(coverage_xml)
+root = tree.getroot()
+
+sources = root.find("sources")
+if sources is not None:
+    for source in list(sources):
+        sources.remove(source)
+    source = ET.SubElement(sources, "source")
+    source.text = workspace
+
+for class_element in root.findall(".//class"):
+    filename = class_element.get("filename")
+    if not filename:
+        continue
+
+    normalized = filename.replace("\\\\", "/")
+    if os.path.isabs(normalized):
+        normalized = os.path.relpath(normalized, workspace).replace("\\\\", "/")
+    elif not normalized.startswith(target + "/"):
+        normalized = "%s/%s" % (target, normalized.lstrip("./"))
+
+    class_element.set("filename", normalized)
+
+tree.write(coverage_xml, encoding="utf-8", xml_declaration=True)
+PY
+                            fi
                         '''
                     )
                 }
