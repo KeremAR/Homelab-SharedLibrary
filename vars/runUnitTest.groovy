@@ -157,18 +157,29 @@ if sources is not None:
     source = ET.SubElement(sources, "source")
     source.text = workspace
 
-for class_element in root.findall(".//class"):
-    filename = class_element.get("filename")
-    if not filename:
+for package in root.findall(".//package"):
+    classes = package.find("classes")
+    if classes is None:
         continue
 
-    normalized = filename.replace("\\\\", "/")
-    if os.path.isabs(normalized):
-        normalized = os.path.relpath(normalized, workspace).replace("\\\\", "/")
-    elif not normalized.startswith(target + "/"):
-        normalized = "%s/%s" % (target, normalized.lstrip("./"))
+    for class_element in list(classes):
+        filename = class_element.get("filename")
+        if not filename:
+            classes.remove(class_element)
+            continue
 
-    class_element.set("filename", normalized)
+        normalized = filename.replace("\\\\", "/").lstrip("./")
+        if os.path.isabs(normalized):
+            normalized = os.path.relpath(normalized, workspace).replace("\\\\", "/")
+
+        if "/" not in normalized:
+            normalized = "%s/%s" % (target, normalized)
+
+        if not normalized.startswith(target + "/"):
+            classes.remove(class_element)
+            continue
+
+        class_element.set("filename", normalized)
 
 tree.write(coverage_xml, encoding="utf-8", xml_declaration=True)
 PY
