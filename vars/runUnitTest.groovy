@@ -110,6 +110,9 @@ def call(Map config = [:]) {
                             mkdir -p "$WORKSPACE/$REPORT_DIR" "$WORKSPACE/.venvs" "$PIP_CACHE_DIR"
 
                             VENV_PATH="$WORKSPACE/.venvs/$UNIT_REPORT_NAME"
+                            COVERAGE_FILE="$WORKSPACE/$REPORT_DIR/.coverage"
+                            export COVERAGE_FILE
+
                             rm -rf "$VENV_PATH"
                             python -m venv "$VENV_PATH"
 

@@ -316,6 +316,9 @@ python -m pytest user-service \
 The helper runs pytest from the workspace root, not from inside the service
 directory. This makes coverage XML paths repository-relative, such as
 `user-service/app.py`, so SonarQube can match them to scanned source files.
+Each service also gets its own `COVERAGE_FILE` under its report directory.
+This matters because unit tests run in parallel; without separate coverage data
+files, one service report can accidentally include another service's files.
 The coverage threshold comes from that service's Jenkinsfile
 `coverageThreshold` value. `runUnitTest` does not accept a top-level coverage
 threshold; every service declares its own threshold.
