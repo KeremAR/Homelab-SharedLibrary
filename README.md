@@ -8,6 +8,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 
 - `python` container for linting and unit tests
 - `node` container for frontend linting
+- `sonar` container with Java runtime for SonarQube scanner execution
 - `hadolint` container for Dockerfile linting
 - `trivy` container for security scans
 - `jenkins-tools-cache-pvc` mounted at `/home/jenkins/agent/tools` for Jenkins tool installers
@@ -52,7 +53,11 @@ pipeline {
 `defaultContainer 'jnlp'` means unqualified Jenkins steps run in the Jenkins
 agent container by default. Lint helpers still run in their own containers
 because they explicitly call `container('python')`, `container('node')`, or
-`container('hadolint')`.
+`container('hadolint')`. SonarQube analysis should pass `container: 'sonar'`.
+The `sonar` container uses a JRE image because SonarScanner CLI is a Java
+program. This keeps the scanner and embedded JavaScript analyzer out of the
+Jenkins `jnlp` remoting container, so scanner memory pressure is less likely to
+kill the Jenkins agent connection.
 
 Jenkins auto-installed tools, such as SonarQube Scanner, are cached under:
 
@@ -381,7 +386,8 @@ runSonarQube(
   ],
   cpdExclusions: [
     '**/tests/**'
-  ]
+  ],
+  container: 'sonar'
 )
 ```
 

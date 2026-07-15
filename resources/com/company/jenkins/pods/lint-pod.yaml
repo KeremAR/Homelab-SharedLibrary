@@ -100,6 +100,27 @@ spec:
         capabilities:
           drop:
             - ALL
+    - name: sonar
+      image: eclipse-temurin:21-jre
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      volumeMounts:
+        - name: tools-cache
+          mountPath: /home/jenkins/agent/tools
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "250m"
+        limits:
+          memory: "2Gi"
+          cpu: "1500m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
     - name: hadolint
       image: hadolint/hadolint:2.12.0-alpine
       imagePullPolicy: IfNotPresent

@@ -190,7 +190,15 @@ private void maybeFetchIssues(Map settings, String sonarUrl, String sonarToken) 
     fetchConfig.sonarUrl = sonarUrl
     fetchConfig.sonarToken = sonarToken
 
-    fetchSonarQubeIssues(fetchConfig)
+    try {
+        fetchSonarQubeIssues(fetchConfig)
+    } catch (e) {
+        if (fetchConfig.get('failOnError', false) as boolean) {
+            throw e
+        }
+
+        echo "SonarQube issue fetch failed but will not fail the build: ${e.message}"
+    }
 }
 
 private void writeSonarProperties(Map settings) {
