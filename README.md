@@ -339,11 +339,13 @@ unit tests run in parallel, both service branches could write to the same raw
 data file and one service's XML report could accidentally include files from
 the other service.
 
-To prevent that, each service gets its own raw coverage data file:
+To prevent that, the helper sets `COVERAGE_FILE` through Jenkins `withEnv`, so
+each service gets its own raw coverage data file before the shell step starts:
 
-```bash
-COVERAGE_FILE="$WORKSPACE/$REPORT_DIR/.coverage"
-export COVERAGE_FILE
+```groovy
+withEnv([
+    "COVERAGE_FILE=${env.WORKSPACE}/${reportDir}/.coverage"
+])
 ```
 
 That produces this isolated flow:

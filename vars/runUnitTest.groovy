@@ -96,6 +96,7 @@ def call(Map config = [:]) {
                     "TEST_PATH=${service.testPath}",
                     "COVERAGE_RCFILE=${env.WORKSPACE}/${service.coverageConfig}",
                     "REPORT_DIR=${reportDir}",
+                    "COVERAGE_FILE=${env.WORKSPACE}/${reportDir}/.coverage",
                     "PIP_CACHE_DIR=${pipCacheDir}",
                     "PIP_NO_CACHE_DIR=false",
                     "COVERAGE_THRESHOLD=${service.coverageThreshold == null ? '' : service.coverageThreshold.toString()}"
@@ -110,8 +111,6 @@ def call(Map config = [:]) {
                             mkdir -p "$WORKSPACE/$REPORT_DIR" "$WORKSPACE/.venvs" "$PIP_CACHE_DIR"
 
                             VENV_PATH="$WORKSPACE/.venvs/$UNIT_REPORT_NAME"
-                            COVERAGE_FILE="$WORKSPACE/$REPORT_DIR/.coverage"
-                            export COVERAGE_FILE
 
                             rm -rf "$VENV_PATH"
                             python -m venv "$VENV_PATH"
