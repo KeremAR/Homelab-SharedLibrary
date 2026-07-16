@@ -112,8 +112,16 @@ def call(Map config = [:]) {
         maybeFetchIssues(settings)
     }
 
-    if (qualityGate && qualityGate.status != 'OK' && settings.abortPipeline) {
-        error "SonarQube Quality Gate failed: ${qualityGate.status}"
+    if (qualityGate) {
+        echo "SonarQube Quality Gate: ${qualityGate.status}"
+
+        if (qualityGate.status != 'OK') {
+            if (settings.abortPipeline) {
+                error "SonarQube Quality Gate failed: ${qualityGate.status}"
+            }
+
+            unstable "SonarQube Quality Gate failed: ${qualityGate.status}"
+        }
     }
 }
 
@@ -190,8 +198,12 @@ private void maybeFetchIssues(Map settings) {
     withSonarQubeEnv(settings.serverName) {
         Map fetchConfig = new LinkedHashMap(settings.fetchIssuesConfig)
         fetchConfig.projectKey = settings.projectKey
-        fetchConfig.branch = fetchConfig.containsKey('branch') ? fetchConfig.branch : (settings.branch ?: env.BRANCH_NAME)
-        fetchConfig.pullRequest = fetchConfig.containsKey('pullRequest') ? fetchConfig.pullRequest : (settings.pullRequest ?: env.CHANGE_ID)
+        if (!fetchConfig.containsKey('branch') && settings.branch) {
+            fetchConfig.branch = settings.branch
+        }
+        if (!fetchConfig.containsKey('pullRequest') && settings.pullRequest) {
+            fetchConfig.pullRequest = settings.pullRequest
+        }
         fetchConfig.inNewCodePeriod = fetchConfig.containsKey('inNewCodePeriod') ? fetchConfig.inNewCodePeriod : settings.inNewCodePeriod
 
         try {

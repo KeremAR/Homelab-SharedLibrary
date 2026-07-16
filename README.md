@@ -622,9 +622,16 @@ place.
 `fetchSonarQubeIssues` calls SonarQube's `/api/issues/search` endpoint after
 analysis and Quality Gate completion. It stores the raw JSON as
 `sonarqube-issues.json`, archives it as a Jenkins artifact, and prints a compact
-issue summary. It uses Bearer authentication from `withSonarQubeEnv` and can
-filter by Jenkins branch or pull request context when SonarQube supports those
-API parameters.
+issue summary. It uses Bearer authentication from `withSonarQubeEnv`.
+
+Branch, pull request, and new-code filters are intentionally not enabled
+automatically inside the Shared Library. The application Jenkinsfile owns that
+policy. In the current homelab flow, only `release/*` branches keep
+project-level issue fetch; every other branch or PR requests
+`inNewCodePeriod: true` so the issue summary focuses on new-code issues. Do not
+pass `branch` or `pullRequest` unless the SonarQube project is explicitly
+configured for that analysis mode; otherwise the API can query a branch context
+that the scanner did not actually analyze.
 
 The fetch helper is useful when you want quick feedback directly in Jenkins
 logs, especially after a Quality Gate failure. It should stay diagnostic. The
@@ -636,6 +643,9 @@ SonarQube evaluates Quality Gate
 waitForQualityGate fails or passes the build
 Jenkins links back to SonarQube for issue details
 ```
+
+When `abortPipeline: false`, the helper still logs the Quality Gate status. If
+the status is not `OK`, the build is marked `UNSTABLE` instead of failing.
 
 ## How Static Security Scanning Works
 
