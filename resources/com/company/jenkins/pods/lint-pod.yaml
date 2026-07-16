@@ -32,6 +32,9 @@ spec:
     - name: trivy-cache
       persistentVolumeClaim:
         claimName: jenkins-trivy-cache-pvc
+    - name: sonar-cache
+      persistentVolumeClaim:
+        claimName: jenkins-sonar-cache-pvc
   containers:
     - name: jnlp
       image: jenkins/inbound-agent:latest
@@ -106,9 +109,16 @@ spec:
       command: ["sleep"]
       args: ["infinity"]
       tty: true
+      env:
+        - name: HOME
+          value: /home/jenkins
+        - name: SONAR_USER_HOME
+          value: /home/jenkins/.sonar
       volumeMounts:
         - name: tools-cache
           mountPath: /home/jenkins/agent/tools
+        - name: sonar-cache
+          mountPath: /home/jenkins/.sonar
       resources:
         requests:
           memory: "512Mi"

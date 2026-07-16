@@ -38,6 +38,9 @@ import com.company.jenkins.Validation
  *   - extraProperties: Optional Map of additional sonar.* properties
  *   - fetchIssues: Fetch and archive SonarQube issues after analysis (default: false)
  *   - fetchIssuesConfig: Optional Map passed to fetchSonarQubeIssues
+ *   - branch: Optional branch filter passed to issue fetch
+ *   - pullRequest: Optional pull request filter passed to issue fetch
+ *   - inNewCodePeriod: Fetch only new-code issues when supported (default: false)
  *   - waitForQualityGate: Wait for Quality Gate result (default: true)
  *   - abortPipeline: Abort pipeline on failed Quality Gate (default: true)
  *   - timeoutMinutes: Timeout for scan and Quality Gate wait (default: 15)
@@ -56,65 +59,61 @@ import com.company.jenkins.Validation
  */
 def call(Map config = [:]) {
     Map settings = normalizeConfig(config)
+    boolean analysisSubmitted = false
 
-    Closure runAnalysis = {
-        String sonarUrl = ''
-        String sonarToken = ''
-        def analysisError = null
-
+    Closure runScanner = {
         validateInputFiles(settings)
         writeSonarProperties(settings)
 
-        try {
-            timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
-                withSonarQubeEnv(settings.serverName) {
-                    sonarUrl = env.SONAR_HOST_URL
-                    sonarToken = env.SONAR_AUTH_TOKEN
+        timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
+            withSonarQubeEnv(settings.serverName) {
+                String scannerHome = tool settings.scannerName
 
-                    String scannerHome = tool settings.scannerName
+                withEnv([
+                    "SONAR_SCANNER_HOME=${scannerHome}",
+                    "SONAR_PROJECT_SETTINGS=${settings.propertiesFile}"
+                ]) {
+                    sh(
+                        label: 'SonarQube scan',
+                        script: '''
+                            set -eu
 
-                    withEnv([
-                        "SONAR_SCANNER_HOME=${scannerHome}",
-                        "SONAR_PROJECT_SETTINGS=${settings.propertiesFile}"
-                    ]) {
-                        sh(
-                            label: 'SonarQube scan',
-                            script: '''
-                                set -eu
+                            if [ ! -x "$SONAR_SCANNER_HOME/bin/sonar-scanner" ]; then
+                                echo "SonarQube scanner executable was not found: $SONAR_SCANNER_HOME/bin/sonar-scanner"
+                                exit 1
+                            fi
 
-                                if [ ! -x "$SONAR_SCANNER_HOME/bin/sonar-scanner" ]; then
-                                    echo "SonarQube scanner executable was not found: $SONAR_SCANNER_HOME/bin/sonar-scanner"
-                                    exit 1
-                                fi
-
-                                "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
-                                    -Dproject.settings="$SONAR_PROJECT_SETTINGS"
-                            '''
-                        )
-                    }
-                }
-
-                if (settings.waitForQualityGate) {
-                    waitForQualityGate abortPipeline: settings.abortPipeline
+                            "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
+                                -Dproject.settings="$SONAR_PROJECT_SETTINGS"
+                        '''
+                    )
                 }
             }
-        } catch (e) {
-            analysisError = e
-        } finally {
-            maybeFetchIssues(settings, sonarUrl, sonarToken)
-        }
-
-        if (analysisError) {
-            throw analysisError
         }
     }
 
     if (settings.container) {
         container(settings.container) {
-            runAnalysis()
+            runScanner()
         }
     } else {
-        runAnalysis()
+        runScanner()
+    }
+    analysisSubmitted = true
+
+    def qualityGate = null
+    if (settings.waitForQualityGate) {
+        timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
+            qualityGate = waitForQualityGate abortPipeline: false
+        }
+    }
+
+    if (analysisSubmitted) {
+        maybeFetchIssues(settings)
+    }
+
+    if (qualityGate && qualityGate.status != 'OK' && settings.abortPipeline) {
+        error "SonarQube Quality Gate failed: ${qualityGate.status}"
     }
 }
 
@@ -167,6 +166,9 @@ private Map normalizeConfig(Map config) {
         extraProperties: normalizeExtraProperties(config.extraProperties ?: [:]),
         fetchIssues: config.get('fetchIssues', false) as boolean,
         fetchIssuesConfig: normalizeFetchIssuesConfig(config.fetchIssuesConfig ?: [:]),
+        branch: config.containsKey('branch') ? validateOptionalBranch(config.branch) : null,
+        pullRequest: config.containsKey('pullRequest') ? validateOptionalPullRequest(config.pullRequest) : null,
+        inNewCodePeriod: config.get('inNewCodePeriod', false) as boolean,
         waitForQualityGate: config.get('waitForQualityGate', true) as boolean,
         abortPipeline: config.get('abortPipeline', true) as boolean,
         timeoutMinutes: parsePositiveInteger(config.timeoutMinutes ?: 15, 'timeoutMinutes'),
@@ -175,29 +177,32 @@ private Map normalizeConfig(Map config) {
     ]
 }
 
-private void maybeFetchIssues(Map settings, String sonarUrl, String sonarToken) {
+private void maybeFetchIssues(Map settings) {
     if (!settings.fetchIssues) {
         return
     }
 
-    if (!sonarUrl || !sonarToken) {
-        echo 'SonarQube issue fetch skipped because SonarQube environment was not available.'
+    if (!settings.waitForQualityGate) {
+        echo 'SonarQube issue fetch skipped because waitForQualityGate is false. Fetching immediately after scanner upload can return stale issues.'
         return
     }
 
-    Map fetchConfig = new LinkedHashMap(settings.fetchIssuesConfig)
-    fetchConfig.projectKey = settings.projectKey
-    fetchConfig.sonarUrl = sonarUrl
-    fetchConfig.sonarToken = sonarToken
+    withSonarQubeEnv(settings.serverName) {
+        Map fetchConfig = new LinkedHashMap(settings.fetchIssuesConfig)
+        fetchConfig.projectKey = settings.projectKey
+        fetchConfig.branch = fetchConfig.containsKey('branch') ? fetchConfig.branch : (settings.branch ?: env.BRANCH_NAME)
+        fetchConfig.pullRequest = fetchConfig.containsKey('pullRequest') ? fetchConfig.pullRequest : (settings.pullRequest ?: env.CHANGE_ID)
+        fetchConfig.inNewCodePeriod = fetchConfig.containsKey('inNewCodePeriod') ? fetchConfig.inNewCodePeriod : settings.inNewCodePeriod
 
-    try {
-        fetchSonarQubeIssues(fetchConfig)
-    } catch (e) {
-        if (fetchConfig.get('failOnError', false) as boolean) {
-            throw e
+        try {
+            fetchSonarQubeIssues(fetchConfig)
+        } catch (e) {
+            if (fetchConfig.get('failOnError', false) as boolean) {
+                throw e
+            }
+
+            echo "SonarQube issue fetch failed but will not fail the build: ${e.message}"
         }
-
-        echo "SonarQube issue fetch failed but will not fail the build: ${e.message}"
     }
 }
 
@@ -268,6 +273,9 @@ private Map<String, String> normalizeExtraProperties(Object rawProperties) {
         if (managedPropertyKeys().contains(propertyKey)) {
             throw new IllegalArgumentException("Use the dedicated runSonarQube parameter instead of extraProperties for ${propertyKey}")
         }
+        if (forbiddenPropertyKeys().contains(propertyKey) || forbiddenPropertyPrefixes().any { prefix -> propertyKey.startsWith(prefix) }) {
+            throw new IllegalArgumentException("Security-sensitive SonarQube property cannot be set through extraProperties: ${propertyKey}")
+        }
         normalized[propertyKey] = validatePropertyValue(value.toString(), propertyKey)
     }
 
@@ -319,6 +327,32 @@ private String validatePlainValue(String value, String label) {
     return validatePropertyValue(value, label)
 }
 
+private String validateOptionalBranch(Object value) {
+    if (value == null || value.toString().trim() == '') {
+        return null
+    }
+
+    String branch = validatePropertyValue(value.toString(), 'branch')
+    if (branch.startsWith('-') || !(branch ==~ /^[A-Za-z0-9._\/-]+$/)) {
+        throw new IllegalArgumentException("Invalid SonarQube branch value: ${branch}")
+    }
+
+    return branch
+}
+
+private String validateOptionalPullRequest(Object value) {
+    if (value == null || value.toString().trim() == '') {
+        return null
+    }
+
+    String pullRequest = validatePropertyValue(value.toString(), 'pullRequest')
+    if (pullRequest.startsWith('-') || !(pullRequest ==~ /^[A-Za-z0-9._:-]+$/)) {
+        throw new IllegalArgumentException("Invalid SonarQube pullRequest value: ${pullRequest}")
+    }
+
+    return pullRequest
+}
+
 private Integer parsePositiveInteger(Object value, String label) {
     if (!(value.toString() ==~ /^[0-9]+$/)) {
         throw new IllegalArgumentException("${label} must be a positive integer: ${value}")
@@ -368,6 +402,26 @@ private Set<String> managedPropertyKeys() {
         'sonar.tests',
         'sonar.test.inclusions'
     ] as Set
+}
+
+private Set<String> forbiddenPropertyKeys() {
+    return [
+        'sonar.token',
+        'sonar.login',
+        'sonar.password',
+        'sonar.host.url',
+        'sonar.projectBaseDir',
+        'sonar.working.directory',
+        'sonar.userHome',
+        'sonar.scanner.metadataFilePath'
+    ] as Set
+}
+
+private List<String> forbiddenPropertyPrefixes() {
+    return [
+        'sonar.auth.',
+        'sonar.scanner.'
+    ]
 }
 
 private String joinCsv(List<String> values) {

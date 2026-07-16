@@ -21,10 +21,13 @@ import com.company.jenkins.Validation
  *
  * @param config Map containing:
  *   - projectKey: REQUIRED - SonarQube project key
- *   - sonarUrl: REQUIRED - SonarQube server URL
- *   - sonarToken: REQUIRED - SonarQube token
+ *   - sonarUrl: SonarQube server URL. Defaults to SONAR_HOST_URL from withSonarQubeEnv.
+ *   - sonarToken: SonarQube token. Defaults to SONAR_AUTH_TOKEN from withSonarQubeEnv.
  *   - severities: List or comma-separated string (default: ['BLOCKER', 'CRITICAL', 'MAJOR'])
  *   - statuses: List or comma-separated string (default: ['OPEN', 'CONFIRMED'])
+ *   - branch: Optional SonarQube branch filter
+ *   - pullRequest: Optional SonarQube pull request filter
+ *   - inNewCodePeriod: Fetch only issues in new code when supported (default: false)
  *   - maxIssues: Maximum issues to fetch from the API (default: 100)
  *   - maxIssuesToPrint: Maximum issues to print in Jenkins log (default: 20)
  *   - outputFile: Repository-relative JSON output file (default: 'sonarqube-issues.json')
@@ -50,16 +53,17 @@ def call(Map config = [:]) {
 
         withEnv([
             "SONAR_PROJECT_KEY=${settings.projectKey}",
-            "SONAR_URL=${settings.sonarUrl}",
-            "SONAR_TOKEN=${settings.sonarToken}",
             "SONAR_SEVERITIES=${settings.severities}",
             "SONAR_STATUSES=${settings.statuses}",
+            "SONAR_BRANCH=${settings.branch ?: ''}",
+            "SONAR_PULL_REQUEST=${settings.pullRequest ?: ''}",
+            "SONAR_IN_NEW_CODE_PERIOD=${settings.inNewCodePeriod}",
             "SONAR_MAX_ISSUES=${settings.maxIssues}",
             "SONAR_MAX_ISSUES_TO_PRINT=${settings.maxIssuesToPrint}",
             "SONAR_TIMEOUT_SECONDS=${settings.timeoutSeconds}",
             "SONAR_ISSUES_OUTPUT=${settings.outputFile}",
             "SONAR_ISSUES_SUMMARY=${settings.summaryFile}"
-        ]) {
+        ] + optionalEnv('SONAR_URL', settings.sonarUrl) + optionalEnv('SONAR_TOKEN', settings.sonarToken)) {
             status = sh(
                 label: 'Fetch SonarQube issues',
                 returnStatus: true,
@@ -67,7 +71,6 @@ def call(Map config = [:]) {
                     set -eu
 
                     python - <<'PY'
-import base64
 import json
 import os
 import sys
@@ -81,14 +84,26 @@ params = {
     "statuses": os.environ["SONAR_STATUSES"],
     "ps": os.environ["SONAR_MAX_ISSUES"],
 }
+if os.environ.get("SONAR_PULL_REQUEST"):
+    params["pullRequest"] = os.environ["SONAR_PULL_REQUEST"]
+elif os.environ.get("SONAR_BRANCH"):
+    params["branch"] = os.environ["SONAR_BRANCH"]
+if os.environ.get("SONAR_IN_NEW_CODE_PERIOD") == "true":
+    params["inNewCodePeriod"] = "true"
 
-base_url = os.environ["SONAR_URL"].rstrip("/")
+base_url = (os.environ.get("SONAR_URL") or os.environ.get("SONAR_HOST_URL") or "").rstrip("/")
+token = os.environ.get("SONAR_TOKEN") or os.environ.get("SONAR_AUTH_TOKEN") or ""
+if not base_url:
+    print("SonarQube URL was not provided. Set sonarUrl or run inside withSonarQubeEnv.", file=sys.stderr)
+    sys.exit(1)
+if not token:
+    print("SonarQube token was not provided. Set sonarToken or run inside withSonarQubeEnv.", file=sys.stderr)
+    sys.exit(1)
+
 url = base_url + "/api/issues/search?" + urllib.parse.urlencode(params)
-token = os.environ["SONAR_TOKEN"] + ":"
-auth = base64.b64encode(token.encode("utf-8")).decode("ascii")
 
 request = urllib.request.Request(url)
-request.add_header("Authorization", "Basic " + auth)
+request.add_header("Authorization", "Bearer " + token)
 
 try:
     with urllib.request.urlopen(
@@ -182,8 +197,8 @@ PY
 private Map normalizeConfig(Map config) {
     return [
         projectKey: validateProjectKey(config.projectKey),
-        sonarUrl: validateUrl(config.sonarUrl?.toString()),
-        sonarToken: validatePlainValue(config.sonarToken?.toString(), 'sonarToken'),
+        sonarUrl: config.sonarUrl ? validateUrl(config.sonarUrl.toString()) : null,
+        sonarToken: config.sonarToken ? validatePlainValue(config.sonarToken.toString(), 'sonarToken') : null,
         severities: normalizeTokenList(
             config.severities ?: ['BLOCKER', 'CRITICAL', 'MAJOR'],
             'SonarQube issue severity'
@@ -192,6 +207,9 @@ private Map normalizeConfig(Map config) {
             config.statuses ?: ['OPEN', 'CONFIRMED'],
             'SonarQube issue status'
         ),
+        branch: config.containsKey('branch') ? validateOptionalBranch(config.branch) : null,
+        pullRequest: config.containsKey('pullRequest') ? validateOptionalPullRequest(config.pullRequest) : null,
+        inNewCodePeriod: config.get('inNewCodePeriod', false) as boolean,
         maxIssues: parseBoundedInteger(config.maxIssues ?: 100, 'maxIssues', 1, 500),
         maxIssuesToPrint: parseBoundedInteger(config.maxIssuesToPrint ?: 20, 'maxIssuesToPrint', 0, 100),
         outputFile: Validation.relativePath((config.outputFile ?: 'sonarqube-issues.json').toString(), 'SonarQube issues output file'),
@@ -251,6 +269,36 @@ private String validateOptionalContainer(Object value) {
     }
 
     return validatePlainValue(value.toString(), 'container')
+}
+
+private List<String> optionalEnv(String key, String value) {
+    return value ? ["${key}=${value}"] : []
+}
+
+private String validateOptionalBranch(Object value) {
+    if (value == null || value.toString().trim() == '') {
+        return null
+    }
+
+    String branch = validatePlainValue(value.toString(), 'branch')
+    if (branch.startsWith('-') || !(branch ==~ /^[A-Za-z0-9._\/-]+$/)) {
+        throw new IllegalArgumentException("Invalid SonarQube branch value: ${branch}")
+    }
+
+    return branch
+}
+
+private String validateOptionalPullRequest(Object value) {
+    if (value == null || value.toString().trim() == '') {
+        return null
+    }
+
+    String pullRequest = validatePlainValue(value.toString(), 'pullRequest')
+    if (pullRequest.startsWith('-') || !(pullRequest ==~ /^[A-Za-z0-9._:-]+$/)) {
+        throw new IllegalArgumentException("Invalid SonarQube pullRequest value: ${pullRequest}")
+    }
+
+    return pullRequest
 }
 
 private String normalizeTokenList(Object value, String label) {

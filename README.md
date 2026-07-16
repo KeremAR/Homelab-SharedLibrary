@@ -15,6 +15,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 - `jenkins-venv-cache-pvc` mounted at `/cache/pip` for pip downloads/wheels
 - `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
 - `jenkins-trivy-cache-pvc` mounted at `/home/jenkins/.cache/trivy`
+- `jenkins-sonar-cache-pvc` mounted at `/home/jenkins/.sonar`
 - `ghcr-creds` image pull secret
 - `automountServiceAccountToken: false`
 - non-root container execution
@@ -69,6 +70,18 @@ That path is backed by `jenkins-tools-cache-pvc`, so tool downloads can survive
 new ephemeral Kubernetes agent pods. The PVC is ReadWriteOnce like the other CI
 caches, so it assumes the current single-app CI flow with concurrent builds
 disabled.
+
+SonarScanner also downloads analyzer and plugin cache files under
+`SONAR_USER_HOME`. The `sonar` container sets:
+
+```text
+HOME=/home/jenkins
+SONAR_USER_HOME=/home/jenkins/.sonar
+```
+
+That directory is backed by `jenkins-sonar-cache-pvc`, separate from the Jenkins
+tool cache. The tool cache stores the scanner binary; the Sonar cache stores
+scanner analyzer files reused by later builds.
 
 ## Lint Helpers
 
@@ -451,6 +464,11 @@ waitForQualityGate
   waits for SonarQube's webhook response after analysis
 ```
 
+The scanner itself runs in the configured `sonar` container because it needs a
+JRE and can use meaningful memory while analyzing JavaScript and Python files.
+`waitForQualityGate` runs after the scanner step as a Jenkins Pipeline step; it
+does not need the scanner container or an executor-heavy shell process.
+
 The helper generates `sonar-project.properties` in the workspace before running
 the scanner. It owns generic properties such as `sonar.projectKey`,
 `sonar.sources`, `sonar.exclusions`, `sonar.python.coverage.reportPaths`, and
@@ -471,7 +489,10 @@ or report path before SonarQube analysis runs without coverage.
 `runSonarQube` can also call `fetchSonarQubeIssues` when `fetchIssues: true` is
 set. This is diagnostic: it archives the SonarQube issue API response and prints
 a short summary in the Jenkins log. It does not replace Quality Gate
-enforcement.
+enforcement. Issue fetch runs only after the scanner has submitted analysis and
+`waitForQualityGate` has completed. If `waitForQualityGate: false`, issue fetch
+is skipped because SonarQube processes scanner uploads asynchronously and the
+API could otherwise return stale issues from a previous analysis.
 
 SonarQube properties are passed in two ways. Common properties have dedicated
 parameters:
@@ -518,6 +539,12 @@ runSonarQube(
 
 The helper writes these values into `sonar-project.properties` before running
 `sonar-scanner`.
+
+Security-sensitive properties cannot be passed through `extraProperties`.
+Examples include `sonar.token`, `sonar.login`, `sonar.password`,
+`sonar.host.url`, `sonar.projectBaseDir`, `sonar.working.directory`,
+`sonar.userHome`, and `sonar.scanner.*`. Credentials and server URLs must come
+from Jenkins' SonarQube Global Configuration through `withSonarQubeEnv`.
 
 ### Why SonarQube Has Helper Functions
 
@@ -566,8 +593,10 @@ the workspace or pass option-looking values.
 
 `normalizeExtraProperties` validates optional custom `sonar.*` properties. It
 also blocks properties that already have first-class helper parameters, such as
-`sonar.sources` or `sonar.projectKey`. Without it, the same property could be
-defined twice and make the final scanner config hard to reason about.
+`sonar.sources` or `sonar.projectKey`, and security-sensitive properties such as
+`sonar.token` or `sonar.host.url`. Without it, the same property could be
+defined twice, point analysis at an unexpected server/path, or write credentials
+into `sonar-project.properties`.
 
 `validatePropertyKey`, `validatePropertyValue`, and `validatePlainValue` protect
 the generated `sonar-project.properties` file. They reject invalid property
@@ -586,12 +615,16 @@ own SonarQube properties file or inline scanner flags.
 negative, or very large timeout could create confusing Jenkins behavior.
 
 `defaultExclusions`, `managedPropertyKeys`, and `joinCsv` are small support
-functions. They keep default ignore patterns, protected property names, and
-comma-separated SonarQube values in one place.
+functions. They keep default ignore patterns, protected property names,
+security-sensitive property names, and comma-separated SonarQube values in one
+place.
 
 `fetchSonarQubeIssues` calls SonarQube's `/api/issues/search` endpoint after
-analysis. It stores the raw JSON as `sonarqube-issues.json`, archives it as a
-Jenkins artifact, and prints a compact issue summary.
+analysis and Quality Gate completion. It stores the raw JSON as
+`sonarqube-issues.json`, archives it as a Jenkins artifact, and prints a compact
+issue summary. It uses Bearer authentication from `withSonarQubeEnv` and can
+filter by Jenkins branch or pull request context when SonarQube supports those
+API parameters.
 
 The fetch helper is useful when you want quick feedback directly in Jenkins
 logs, especially after a Quality Gate failure. It should stay diagnostic. The

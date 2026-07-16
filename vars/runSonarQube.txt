@@ -43,6 +43,9 @@ runSonarQube(
     <li><code>extraProperties</code>: Optional additional SonarQube properties.</li>
     <li><code>fetchIssues</code>: Fetch and archive SonarQube issues after analysis. Default: false.</li>
     <li><code>fetchIssuesConfig</code>: Optional map passed to <code>fetchSonarQubeIssues</code>.</li>
+    <li><code>branch</code>: Optional SonarQube branch filter for issue fetch.</li>
+    <li><code>pullRequest</code>: Optional SonarQube pull request filter for issue fetch.</li>
+    <li><code>inNewCodePeriod</code>: Fetch only new-code issues when supported by the SonarQube API. Default: false.</li>
     <li><code>waitForQualityGate</code>: Wait for Quality Gate result. Default: true.</li>
     <li><code>abortPipeline</code>: Abort pipeline on failed Quality Gate. Default: true.</li>
     <li><code>timeoutMinutes</code>: Scan and Quality Gate timeout. Default: 15.</li>
@@ -56,6 +59,16 @@ runSonarQube(
 The helper uses <code>withSonarQubeEnv(serverName)</code> to inject the
 SonarQube URL and token configured in Jenkins. It uses
 <code>tool scannerName</code> to find the scanner installed by Jenkins.
+Issue fetch runs after the Quality Gate step so the API does not read stale
+issues from a previous analysis.
+</p>
+
+<p>
+Security-sensitive properties such as <code>sonar.token</code>,
+<code>sonar.login</code>, <code>sonar.host.url</code>,
+<code>sonar.projectBaseDir</code>, <code>sonar.working.directory</code>,
+<code>sonar.userHome</code>, and <code>sonar.scanner.*</code> are rejected from
+<code>extraProperties</code>.
 </p>
 
 <p>
