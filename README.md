@@ -10,6 +10,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 - `node` container for frontend linting
 - `sonar` container with Java runtime for SonarQube scanner execution
 - `hadolint` container for Dockerfile linting
+- `buildkit` container for daemonless OCI image builds
 - `trivy` container for security scans
 - `jenkins-tools-cache-pvc` mounted at `/home/jenkins/agent/tools` for Jenkins tool installers
 - `jenkins-venv-cache-pvc` mounted at `/cache/pip` for pip downloads/wheels
@@ -90,6 +91,7 @@ scanner analyzer files reused by later builds.
 - `runHadolint(dockerfiles: [...])` runs Hadolint without Docker-in-Docker.
 - `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
 - `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
+- `runBuildImages(images: [...])` builds Dockerfiles with BuildKit and exports OCI tar archives.
 
 Set `failFast: false` on lint helpers when you want one build to report as
 many lint errors as possible instead of stopping sibling branches early.
@@ -105,6 +107,14 @@ Python unit tests create a fresh workspace-local venv on every build and use a
 PVC-backed pip cache at `/cache/pip`. Coverage reports are written under
 `coverage-reports/<target>/coverage.xml` so they can later be passed to
 SonarQube.
+
+Image builds use rootless BuildKit from the `buildkit` container. The helper
+does not use Docker-in-Docker and does not mount `/var/run/docker.sock`.
+Build output is written as OCI archives under `image-artifacts/` by default.
+Those archives can later be scanned with Trivy using `--input`. If a later
+pipeline must push an existing OCI archive, it needs a registry client such as
+Crane, Regctl, ORAS, or Skopeo. If we do not want a registry-client container,
+the staging pipeline should rebuild with BuildKit and use `type=image,push=true`.
 
 ## How Python Linting Works
 

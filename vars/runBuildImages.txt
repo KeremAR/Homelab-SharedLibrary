@@ -1,0 +1,61 @@
+<h2>runBuildImages</h2>
+
+Runs BuildKit builds for one or more Dockerfiles and exports OCI tar archives.
+It does not use Docker-in-Docker and does not mount the Docker socket.
+
+<h3>Example</h3>
+
+<pre>
+runBuildImages(
+    images: [
+        [
+            name: 'user-service',
+            context: '.',
+            dockerfile: 'user-service/Dockerfile',
+            image: 'user-service:abc1234-v1.0-candidate'
+        ],
+        [
+            name: 'frontend',
+            context: 'frontend',
+            dockerfile: 'frontend/Dockerfile',
+            tag: 'abc1234-v1.0-candidate'
+        ]
+    ],
+    outputDir: 'image-artifacts',
+    platform: 'linux/amd64',
+    failFast: false
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>images</code>: Required list of image maps.</li>
+    <li><code>outputDir</code>: Directory for OCI archives. Default: <code>image-artifacts</code>.</li>
+    <li><code>platform</code>: Default target platform. Default: <code>linux/amd64</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>buildkit</code>.</li>
+    <li><code>archiveArtifacts</code>: Archive OCI tar files in Jenkins. Default: <code>true</code>.</li>
+    <li><code>failFast</code>: Whether sibling builds stop after the first failure.</li>
+</ul>
+
+<h3>Image Map</h3>
+
+<ul>
+    <li><code>name</code>: Required logical image name, also used for the archive filename.</li>
+    <li><code>context</code>: Build context directory. Default: <code>.</code>.</li>
+    <li><code>dockerfile</code>: Dockerfile path. Default: <code>&lt;context&gt;/Dockerfile</code>.</li>
+    <li><code>image</code>: Image reference written to <code>images.txt</code>.</li>
+    <li><code>tag</code>: Tag used when <code>image</code> is omitted.</li>
+    <li><code>platform</code>: Image-specific platform override.</li>
+    <li><code>target</code>: Optional Dockerfile target stage.</li>
+    <li><code>buildArgs</code>: Optional Docker build args map.</li>
+</ul>
+
+<h3>Outputs</h3>
+
+<ul>
+    <li>Creates <code>image-artifacts/*.oci.tar</code>.</li>
+    <li>Creates <code>image-artifacts/images.txt</code> to map logical image names to archive paths and image references.</li>
+    <li>Sets <code>env.BUILT_IMAGE_ARCHIVES</code>.</li>
+    <li>Sets <code>env.BUILT_IMAGE_REFS</code>.</li>
+</ul>
