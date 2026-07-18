@@ -56,7 +56,7 @@ def call(Map config = [:]) {
                         label: "Black: ${safeTarget}",
                         script: '''
                             set -eu
-                            black --check .
+                            black --check --diff .
                         '''
                     )
                     sh(
