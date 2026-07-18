@@ -103,13 +103,10 @@ def call(Map config = [:]) {
 
     def qualityGate = null
     if (settings.waitForQualityGate) {
+        echo 'Waiting for SonarQube Quality Gate result'
         timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
             qualityGate = waitForQualityGate abortPipeline: false
         }
-    }
-
-    if (analysisSubmitted) {
-        maybeFetchIssues(settings)
     }
 
     if (qualityGate) {
@@ -122,6 +119,10 @@ def call(Map config = [:]) {
 
             unstable "SonarQube Quality Gate failed: ${qualityGate.status}"
         }
+    }
+
+    if (analysisSubmitted) {
+        maybeFetchIssues(settings)
     }
 }
 
