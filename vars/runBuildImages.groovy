@@ -3,31 +3,32 @@
 import com.company.jenkins.Validation
 
 /**
- * Build one or more container images with BuildKit and export OCI archives.
+ * Build one or more container images with Docker-in-Docker and export archives.
  *
- * This library builds Dockerfiles without Docker-in-Docker and without mounting
- * /var/run/docker.sock. It expects a Jenkins Kubernetes agent container named
- * `buildkit` by default, usually based on `moby/buildkit:rootless`.
+ * This library builds Dockerfiles through a Docker CLI container connected to a
+ * Docker-in-Docker sidecar over DOCKER_HOST=tcp://localhost:2375. It expects a
+ * Jenkins Kubernetes agent container named `docker` by default.
  *
  * BUILD BEHAVIOR:
  * - Builds every configured image in parallel
- * - Uses BuildKit daemonless mode when available
- * - Exports OCI tar archives into the workspace
- * - Optionally archives the OCI tar files as Jenkins artifacts
+ * - Uses docker build
+ * - Exports Docker image tar archives into the workspace with docker save
+ * - Optionally archives the Docker image tar files as Jenkins artifacts
  * - Does not push images to a registry
  *
  * SECURITY:
- * - No Docker daemon is required
- * - No Docker socket is mounted
+ * - Does not mount the host Docker socket
+ * - Requires a privileged docker:dind sidecar in the Jenkins agent pod
  * - Repository paths are validated before use
  * - Build args are validated and shell-quoted
  *
  * @param config Map containing:
  *   - images: REQUIRED - List of image maps
- *   - outputDir: Directory for OCI archives (default: 'image-artifacts')
+ *   - outputDir: Directory for Docker archives (default: 'image-artifacts')
  *   - platform: Default platform (default: 'linux/amd64')
- *   - container: Jenkins Kubernetes container name (default: 'buildkit')
- *   - archiveArtifacts: Archive OCI tar files in Jenkins (default: true)
+ *   - container: Jenkins Kubernetes container name (default: 'docker')
+ *   - dockerHost: Docker daemon endpoint (default: 'tcp://localhost:2375')
+ *   - archiveArtifacts: Archive Docker tar files in Jenkins (default: true)
  *   - failFast: Whether parallel image builds should fail fast (default: true)
  *
  * Image map keys:
@@ -45,7 +46,7 @@ import com.company.jenkins.Validation
  *     images: [
  *         [
  *             name: 'user-service',
- *             context: '.',
+ *             context: 'user-service',
  *             dockerfile: 'user-service/Dockerfile',
  *             image: 'user-service:abc1234-v1.0-candidate'
  *         ],
@@ -65,7 +66,8 @@ def call(Map config = [:]) {
         error 'runBuildImages requires images, for example: [images: [[name: "user-service"]]]'
     }
 
-    String containerName = config.container ?: 'buildkit'
+    String containerName = config.container ?: 'docker'
+    String dockerHost = config.dockerHost ?: 'tcp://localhost:2375'
     String outputDir = Validation.relativePath((config.outputDir ?: 'image-artifacts').toString(), 'Image artifact output directory')
     String defaultPlatform = platform((config.platform ?: 'linux/amd64').toString(), 'Default image platform')
     String defaultTag = dockerTag((config.tag ?: 'local').toString(), 'Default image tag')
@@ -82,43 +84,48 @@ def call(Map config = [:]) {
                 validateBuildFiles(image)
 
                 String buildArgFlags = buildArgsToFlags(image.buildArgs)
-                String targetFlag = image.target ? "--opt target=${Validation.shellQuote(image.target)}" : ''
-                String outputSpec = "type=oci,dest=\$WORKSPACE/${image.outputFile}"
+                String targetFlag = image.target ? "--target ${Validation.shellQuote(image.target)}" : ''
 
                 withEnv([
+                    "DOCKER_HOST=${dockerHost}",
+                    "DOCKER_TLS_CERTDIR=",
                     "BUILD_CONTEXT=${image.context}",
                     "BUILD_DOCKERFILE=${image.dockerfile}",
+                    "BUILD_IMAGE_REF=${image.imageRef}",
                     "BUILD_PLATFORM=${image.platform}",
-                    "BUILD_OUTPUT_FILE=${image.outputFile}",
-                    "BUILD_OUTPUT_SPEC=${outputSpec}"
+                    "BUILD_OUTPUT_FILE=${image.outputFile}"
                 ]) {
                     sh(
-                        label: "Build OCI image: ${image.name}",
+                        label: "Build Docker image: ${image.name}",
                         script: """
                             set -eu
 
                             mkdir -p "\$WORKSPACE/${outputDir}"
 
-                            if command -v buildctl-daemonless.sh >/dev/null 2>&1; then
-                                BUILDKIT_CMD=buildctl-daemonless.sh
-                            elif command -v buildctl >/dev/null 2>&1; then
-                                BUILDKIT_CMD=buildctl
-                            else
-                                echo "buildctl or buildctl-daemonless.sh is required in the ${containerName} container" >&2
-                                exit 1
-                            fi
+                            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                                if docker info >/dev/null 2>&1; then
+                                    break
+                                fi
 
-                            "\$BUILDKIT_CMD" build \\
-                                --frontend dockerfile.v0 \\
-                                --local context="\$WORKSPACE/\$BUILD_CONTEXT" \\
-                                --local dockerfile="\$WORKSPACE" \\
-                                --opt filename="\$BUILD_DOCKERFILE" \\
-                                --opt platform="\$BUILD_PLATFORM" \\
+                                if [ "\$attempt" = "12" ]; then
+                                    echo "Docker daemon is not ready at \$DOCKER_HOST" >&2
+                                    docker version || true
+                                    exit 1
+                                fi
+
+                                sleep 5
+                            done
+
+                            docker build \\
+                                --pull=false \\
+                                --platform "\$BUILD_PLATFORM" \\
+                                -f "\$WORKSPACE/\$BUILD_DOCKERFILE" \\
+                                -t "\$BUILD_IMAGE_REF" \\
                                 ${targetFlag} \\
                                 ${buildArgFlags} \\
-                                --output "\$BUILD_OUTPUT_SPEC" \\
-                                --progress=plain
+                                "\$WORKSPACE/\$BUILD_CONTEXT"
 
+                            docker save -o "\$WORKSPACE/\$BUILD_OUTPUT_FILE" "\$BUILD_IMAGE_REF"
                             test -s "\$WORKSPACE/\$BUILD_OUTPUT_FILE"
                         """
                     )
@@ -137,7 +144,7 @@ def call(Map config = [:]) {
     if (archiveEnabled) {
         archiveArtifacts(
             allowEmptyArchive: false,
-            artifacts: "${outputDir}/*.oci.tar,${outputDir}/images.txt",
+            artifacts: "${outputDir}/*.docker.tar,${outputDir}/images.txt",
             fingerprint: true
         )
     }
@@ -164,7 +171,7 @@ private List normalizeImages(
         String tag = dockerTag((image.tag ?: defaultTag).toString(), "Image tag for ${name}")
         String imageRef = image.image ? imageReference(image.image.toString(), "Image reference for ${name}") : imageReference("${name}:${tag}", "Image reference for ${name}")
         String resolvedPlatform = platform((image.platform ?: defaultPlatform).toString(), "Platform for ${name}")
-        String outputName = "${sanitizeForFilename(name)}.oci.tar"
+        String outputName = "${sanitizeForFilename(name)}.docker.tar"
         String outputFile = "${outputDir}/${outputName}"
         String target = image.target ? Validation.relativePath(image.target.toString(), "Dockerfile target for ${name}") : ''
         Map buildArgs = normalizeBuildArgs(image.buildArgs ?: [:], name)
@@ -214,7 +221,7 @@ private Map normalizeBuildArgs(Map buildArgs, String imageName) {
 
 private String buildArgsToFlags(Map buildArgs) {
     return buildArgs.collect { key, value ->
-        "--opt build-arg:${key}=${Validation.shellQuote(value)}"
+        "--build-arg ${Validation.shellQuote("${key}=${value}")}"
     }.join(' ')
 }
 

@@ -1,7 +1,7 @@
 <h2>runBuildImages</h2>
 
-Runs BuildKit builds for one or more Dockerfiles and exports OCI tar archives.
-It does not use Docker-in-Docker and does not mount the Docker socket.
+Runs Docker builds for one or more Dockerfiles through a Docker-in-Docker
+sidecar and exports Docker image tar archives.
 
 <h3>Example</h3>
 
@@ -10,7 +10,7 @@ runBuildImages(
     images: [
         [
             name: 'user-service',
-            context: '.',
+            context: 'user-service',
             dockerfile: 'user-service/Dockerfile',
             image: 'user-service:abc1234-v1.0-candidate'
         ],
@@ -31,10 +31,11 @@ runBuildImages(
 
 <ul>
     <li><code>images</code>: Required list of image maps.</li>
-    <li><code>outputDir</code>: Directory for OCI archives. Default: <code>image-artifacts</code>.</li>
+    <li><code>outputDir</code>: Directory for Docker image archives. Default: <code>image-artifacts</code>.</li>
     <li><code>platform</code>: Default target platform. Default: <code>linux/amd64</code>.</li>
-    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>buildkit</code>.</li>
-    <li><code>archiveArtifacts</code>: Archive OCI tar files in Jenkins. Default: <code>true</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>docker</code>.</li>
+    <li><code>dockerHost</code>: Docker daemon endpoint. Default: <code>tcp://localhost:2375</code>.</li>
+    <li><code>archiveArtifacts</code>: Archive Docker image tar files in Jenkins. Default: <code>true</code>.</li>
     <li><code>failFast</code>: Whether sibling builds stop after the first failure.</li>
 </ul>
 
@@ -54,7 +55,7 @@ runBuildImages(
 <h3>Outputs</h3>
 
 <ul>
-    <li>Creates <code>image-artifacts/*.oci.tar</code>.</li>
+    <li>Creates <code>image-artifacts/*.docker.tar</code>.</li>
     <li>Creates <code>image-artifacts/images.txt</code> to map logical image names to archive paths and image references.</li>
     <li>Sets <code>env.BUILT_IMAGE_ARCHIVES</code>.</li>
     <li>Sets <code>env.BUILT_IMAGE_REFS</code>.</li>

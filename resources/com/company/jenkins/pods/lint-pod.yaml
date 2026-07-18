@@ -35,6 +35,8 @@ spec:
     - name: sonar-cache
       persistentVolumeClaim:
         claimName: jenkins-sonar-cache-pvc
+    - name: docker-graph-storage
+      emptyDir: {}
   containers:
     - name: jnlp
       image: jenkins/inbound-agent:latest
@@ -149,30 +151,53 @@ spec:
         capabilities:
           drop:
             - ALL
-    - name: buildkit
-      image: moby/buildkit:rootless
+    - name: docker
+      image: docker:29-cli
       imagePullPolicy: IfNotPresent
       command: ["sleep"]
       args: ["infinity"]
       tty: true
       env:
-        - name: BUILDKITD_FLAGS
-          value: --oci-worker-no-process-sandbox
+        - name: DOCKER_HOST
+          value: tcp://localhost:2375
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
       volumeMounts:
         - name: tools-cache
           mountPath: /home/jenkins/agent/tools
       resources:
         requests:
-          memory: "512Mi"
-          cpu: "250m"
+          memory: "256Mi"
+          cpu: "100m"
         limits:
-          memory: "2Gi"
-          cpu: "1500m"
+          memory: "1Gi"
+          cpu: "1000m"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
           drop:
             - ALL
+    - name: docker-dind
+      image: docker:29-dind
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+      volumeMounts:
+        - name: docker-graph-storage
+          mountPath: /var/lib/docker
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "250m"
+        limits:
+          memory: "3Gi"
+          cpu: "2000m"
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        runAsGroup: 0
+        runAsNonRoot: false
     - name: trivy
       image: aquasec/trivy:latest
       imagePullPolicy: IfNotPresent
