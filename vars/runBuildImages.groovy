@@ -100,7 +100,11 @@ def call(Map config = [:]) {
                         script: """
                             set -eu
 
+                            export HOME="\$WORKSPACE"
+                            export DOCKER_CONFIG="\$WORKSPACE/.docker"
+
                             mkdir -p "\$WORKSPACE/${outputDir}"
+                            mkdir -p "\$DOCKER_CONFIG"
 
                             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
                                 if docker info >/dev/null 2>&1; then
