@@ -35,9 +35,7 @@ spec:
     - name: sonar-cache
       persistentVolumeClaim:
         claimName: jenkins-sonar-cache-pvc
-    - name: docker-graph-storage
-      persistentVolumeClaim:
-        claimName: jenkins-docker-cache-pvc
+__DOCKER_GRAPH_STORAGE_VOLUME__
   containers:
     - name: jnlp
       image: jenkins/inbound-agent:latest

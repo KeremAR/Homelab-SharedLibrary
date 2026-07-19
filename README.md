@@ -18,7 +18,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 - `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
 - `jenkins-trivy-cache-pvc` mounted at `/home/jenkins/.cache/trivy`
 - `jenkins-sonar-cache-pvc` mounted at `/home/jenkins/.sonar`
-- `jenkins-docker-cache-pvc` mounted at `/var/lib/docker` in the `docker-dind` sidecar
+- service-specific Docker cache PVCs mounted at `/var/lib/docker` in the `docker-dind` sidecar on release branches
 - `ghcr-creds` image pull secret
 - `automountServiceAccountToken: false`
 - non-root container execution
@@ -39,7 +39,7 @@ Example:
 pipeline {
   agent {
     kubernetes {
-      yaml ciLintPodTemplate()
+      yaml ciLintPodTemplate(images: imageBuildConfig.images)
       defaultContainer 'jnlp'
     }
   }
@@ -118,10 +118,13 @@ archives under `image-artifacts/` by default. Those archives can later be scanne
 with Trivy using `--input`, loaded with `docker load`, or pushed by a later
 pipeline after loading into a Docker daemon.
 
-Docker layer cache is stored in `jenkins-docker-cache-pvc` through the DinD
-sidecar's `/var/lib/docker` directory. This speeds up repeated image builds, but
-the cache can grow as base images and dependency layers change. Keep an eye on
-the Longhorn volume and prune/resize it when needed.
+Docker layer cache is stored through the DinD sidecar's `/var/lib/docker`
+directory. Release branches mount a service-specific PVC such as
+`jenkins-docker-cache-user-service-pvc`, while non-release branches use an
+`emptyDir` cache because they do not build release images. Per-service PVCs avoid
+two independent Docker daemons writing to the same Docker data directory. The
+cache can still grow as base images and dependency layers change, so keep an eye
+on the Longhorn volumes and prune/resize them when needed.
 
 ## How Python Linting Works
 
