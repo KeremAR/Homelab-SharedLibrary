@@ -123,8 +123,15 @@ directory. Release branches mount a service-specific PVC such as
 `jenkins-docker-cache-user-service-pvc`, while non-release branches use an
 `emptyDir` cache because they do not build release images. Per-service PVCs avoid
 two independent Docker daemons writing to the same Docker data directory. The
-cache can still grow as base images and dependency layers change, so keep an eye
-on the Longhorn volumes and prune/resize them when needed.
+Docker cache PVCs use `ReadWriteOncePod`, so if two builds for the same service
+try to run at the same time, Kubernetes should block the second pod from mounting
+the same cache instead of letting two Docker daemons write to it. The cache can
+still grow as base images and dependency layers change, so keep an eye on the
+Longhorn volumes and prune/resize them when needed.
+
+Release branch parsing is shared by `ReleaseResolver` in `src/`. Both
+`ciLintPodTemplate()` and `runReleaseImages()` use the same resolver, so the pod
+mounts the same service cache that the build step later selects.
 
 ## How Python Linting Works
 

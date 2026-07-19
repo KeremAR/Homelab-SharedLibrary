@@ -1,3 +1,5 @@
+import com.company.jenkins.ReleaseResolver
+
 /**
  * Return the Kubernetes pod template used by lint-oriented Jenkins pipelines.
  *
@@ -42,43 +44,20 @@ private String resolveDockerCachePvc(Map config) {
 
     String branchName = (config.branchName ?: env.BRANCH_NAME ?: '').toString()
     String releasePrefix = (config.releasePrefix ?: 'release/').toString()
-    if (!branchName.startsWith(releasePrefix)) {
-        return ''
-    }
 
     List images = config.images ?: []
-    if (images.isEmpty()) {
+    Map releaseInfo = ReleaseResolver.resolve(
+        images: images,
+        branchName: branchName,
+        releasePrefix: releasePrefix,
+        required: false
+    )
+
+    if (!releaseInfo.releaseBranch || !releaseInfo.service) {
         return ''
     }
 
-    String releaseSpec = branchName
-        .substring(releasePrefix.length())
-        .replaceAll(/[^A-Za-z0-9_.-]/, '-')
-
-    String serviceName = resolveServiceName(images, releaseSpec)
-    if (!serviceName) {
-        return ''
-    }
-
-    return validatePvcName("jenkins-docker-cache-${serviceName}-pvc")
-}
-
-private String resolveServiceName(List images, String releaseSpec) {
-    List imageNames = images.collect { image ->
-        image.name?.toString()
-    }.findAll { name ->
-        name
-    }
-
-    if (images.size() == 1 && releaseSpec.startsWith('v')) {
-        return imageNames[0]
-    }
-
-    List matchingNames = imageNames.findAll { imageName ->
-        releaseSpec.startsWith("${imageName}-")
-    }
-
-    return matchingNames.size() == 1 ? matchingNames[0] : ''
+    return validatePvcName("jenkins-docker-cache-${releaseInfo.service}-pvc")
 }
 
 private String validatePvcName(String value) {

@@ -1,5 +1,7 @@
 #!/usr/bin/env groovy
 
+import com.company.jenkins.ReleaseResolver
+
 /**
  * Build the image that belongs to the current release branch.
  *
@@ -42,15 +44,12 @@ def call(Map config = [:]) {
     String releasePrefix = (config.releasePrefix ?: 'release/').toString()
     String environmentName = tagSegment((config.environment ?: 'staging').toString(), 'release environment')
 
-    if (!branchName.startsWith(releasePrefix)) {
-        error "runReleaseImages expects a ${releasePrefix}<service>-v<version> branch. Got: ${branchName}"
-    }
-
-    String releaseSpec = branchName
-        .substring(releasePrefix.length())
-        .replaceAll(/[^A-Za-z0-9_.-]/, '-')
-
-    Map releaseInfo = resolveReleaseInfo(rawImages, releaseSpec, branchName, releasePrefix)
+    Map releaseInfo = ReleaseResolver.resolve(
+        images: rawImages,
+        branchName: branchName,
+        releasePrefix: releasePrefix,
+        required: true
+    )
     String shortCommit = resolveShortCommit(config)
     String imageTag = "${shortCommit}-${releaseInfo.version}-${environmentName}"
 
@@ -69,40 +68,6 @@ def call(Map config = [:]) {
         archiveArtifacts: config.get('archiveArtifacts', true),
         failFast: config.get('failFast', true)
     )
-}
-
-private Map resolveReleaseInfo(List images, String releaseSpec, String branchName, String releasePrefix) {
-    List imageNames = images.collect { image ->
-        image.name?.toString()
-    }.findAll { name ->
-        name
-    }
-
-    if (images.size() == 1 && releaseSpec.startsWith('v')) {
-        return [
-            service: imageNames[0],
-            version: releaseSpec
-        ]
-    }
-
-    List matchingNames = imageNames.findAll { imageName ->
-        releaseSpec.startsWith("${imageName}-")
-    }
-
-    if (matchingNames.size() != 1) {
-        error "Release branch must match exactly one service as ${releasePrefix}<service>-v<version>. Branch: ${branchName}, matched services: ${matchingNames}"
-    }
-
-    String serviceName = matchingNames[0]
-    String version = releaseSpec.substring("${serviceName}-".length())
-    if (!version.startsWith('v')) {
-        error "Release branch version must start with v. Expected ${releasePrefix}${serviceName}-v<version>, got: ${branchName}"
-    }
-
-    return [
-        service: serviceName,
-        version: version
-    ]
 }
 
 private String resolveShortCommit(Map config) {

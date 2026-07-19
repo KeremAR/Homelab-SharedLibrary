@@ -16,6 +16,6 @@
  *   }
  * }
  */
-def call() {
-    return ciLintPodTemplate()
+def call(Map config = [:]) {
+    return ciLintPodTemplate(config)
 }
