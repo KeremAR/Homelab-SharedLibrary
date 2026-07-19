@@ -2,9 +2,12 @@
 
 Reusable Jenkins Pipeline helpers for the Homelab CI/CD setup.
 
-## Lint Pod Template
+## CI Pod Template
 
-Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agent with:
+Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes
+agent. The name stayed as `ciLintPodTemplate` because this started as the lint
+agent, but it now contains the shared CI containers used by lint, test, scan,
+SonarQube, and image build stages:
 
 - `python` container for linting and unit tests
 - `node` container for frontend linting
@@ -86,15 +89,25 @@ That directory is backed by `jenkins-sonar-cache-pvc`, separate from the Jenkins
 tool cache. The tool cache stores the scanner binary; the Sonar cache stores
 scanner analyzer files reused by later builds.
 
+## Helper Overview
+
+- `runPythonLinting(targets: [...])` runs Python formatting and lint checks.
+- `runNodeLinting(packageDirs: [...])` runs frontend dependency install and lint checks.
+- `runHadolint(dockerfiles: [...])` runs Dockerfile lint checks.
+- `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
+- `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
+- `ensureTrivyDB()` prepares the shared Trivy vulnerability database cache.
+- `runTrivyFSScan(targets: [...])` scans application files and dependency lock files.
+- `runTrivySecretScan(targets: [...])` scans repository content for secrets.
+- `runTrivyIaCscan(targets: [...])` scans Kubernetes, Terraform, Compose, and other IaC files when the repository owns infrastructure manifests.
+- `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
+- `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
+
 ## Lint Helpers
 
 - `runPythonLinting(targets: [...])` runs `black --check .` and `flake8 .`.
 - `runNodeLinting(packageDirs: [...])` runs `npm ci --prefer-offline --no-audit` and `npm run lint`.
 - `runHadolint(dockerfiles: [...])` runs Hadolint without Docker-in-Docker.
-- `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
-- `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
-- `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
-- `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 
 Set `failFast: false` on lint helpers when you want one build to report as
 many lint errors as possible instead of stopping sibling branches early.
@@ -106,17 +119,98 @@ Project-specific lint policy should live in the application repository:
 - `.hadolint.yaml` for Hadolint
 - `package.json` for frontend lint scripts
 
-Python unit tests create a fresh workspace-local venv on every build and use a
-PVC-backed pip cache at `/cache/pip`. Coverage reports are written under
-`coverage-reports/<target>/coverage.xml` so they can later be passed to
-SonarQube.
+## Image Build Flow
+
+Image builds are split into two helpers:
+
+```text
+runReleaseImages
+  reads the branch policy
+  selects the image for the released service
+  creates the release tag
+  calls runBuildImages
+
+runBuildImages
+  validates image config
+  runs docker build
+  runs docker save
+  writes image-artifacts/images.txt
+  archives the image tar and manifest files
+```
+
+The Jenkinsfile declares project image metadata, for example:
+
+```groovy
+def imageBuildConfig = [
+  outputDir: 'image-artifacts',
+  platform: 'linux/amd64',
+  images: [
+    [name: 'user-service', context: 'user-service', dockerfile: 'user-service/Dockerfile'],
+    [name: 'todo-service', context: 'todo-service', dockerfile: 'todo-service/Dockerfile'],
+    [name: 'frontend', context: 'frontend', dockerfile: 'frontend/Dockerfile']
+  ]
+]
+```
+
+This keeps the Shared Library project-agnostic. A monorepo can pass three
+images; a future single-service repository can pass only one image without
+changing the library code.
+
+Release branches use this format:
+
+```text
+release/<service>-v<version>
+```
+
+For example:
+
+```text
+release/user-service-v1.0
+```
+
+`runReleaseImages()` reads `env.BRANCH_NAME`, resolves the service as
+`user-service`, resolves the version as `v1.0`, reads the current short commit,
+and creates this tag:
+
+```text
+<commit>-v1.0-staging
+```
+
+So the final local image reference becomes:
+
+```text
+user-service:<commit>-v1.0-staging
+```
+
+The archived tar file uses a filesystem-safe version of the same reference:
+
+```text
+image-artifacts/user-service_<commit>-v1.0-staging.docker.tar
+```
+
+`images.txt` is a small manifest file written next to the tar archives. It
+records which service was built, which image reference was used, where the tar
+file is, and which platform was targeted:
+
+```text
+user-service  user-service:<commit>-v1.0-staging  image-artifacts/user-service_<commit>-v1.0-staging.docker.tar  linux/amd64
+```
+
+This matters for later deploy pipelines. A staging deploy step can read
+`images.txt`, download the matching tar artifact, run `docker load`, tag it for
+the registry, and push it without guessing artifact names.
+
+Build output is archived with Jenkins' built-in `archiveArtifacts(...)` step.
+These image tar files are Jenkins build artifacts, not BuildKit artifacts. They
+are stored under Jenkins build history on `jenkins-home-pvc`. Retention is
+controlled from the Jenkinsfile with `buildDiscarder(...)`; in the current test
+setup only a small number of recent artifacts should remain.
 
 Image builds use the `docker` CLI container and the `docker-dind` sidecar over
 `DOCKER_HOST=tcp://localhost:2375`. This avoids mounting the host Docker socket,
-but the sidecar must run privileged. Build output is written as Docker image
-archives under `image-artifacts/` by default. Those archives can later be scanned
-with Trivy using `--input`, loaded with `docker load`, or pushed by a later
-pipeline after loading into a Docker daemon.
+but the sidecar must run privileged. `runBuildImages()` intentionally does not
+allow Jenkinsfiles to override `dockerHost`, because the build must use only the
+pod-local Docker daemon.
 
 Docker layer cache is stored through the DinD sidecar's `/var/lib/docker`
 directory. Release branches mount a service-specific PVC such as
@@ -132,6 +226,27 @@ Longhorn volumes and prune/resize them when needed.
 Release branch parsing is shared by `ReleaseResolver` in `src/`. Both
 `ciLintPodTemplate()` and `runReleaseImages()` use the same resolver, so the pod
 mounts the same service cache that the build step later selects.
+
+The pod template chooses Docker cache storage before the Jenkins stages run:
+
+```text
+release/user-service-v1.0
+  -> jenkins-docker-cache-user-service-pvc
+
+release/todo-service-v1.0
+  -> jenkins-docker-cache-todo-service-pvc
+
+release/frontend-v1.0
+  -> jenkins-docker-cache-frontend-pvc
+
+PR/main/non-release branch
+  -> emptyDir cache
+```
+
+That timing is why a Jenkins `lock { ... }` inside the build stage is not enough
+to protect a shared `/var/lib/docker` PVC. By the time the stage starts, the pod
+has already mounted the volume and the Docker daemon may already be running.
+`ReadWriteOncePod` moves the protection to Kubernetes volume attachment time.
 
 ## How Python Linting Works
 
