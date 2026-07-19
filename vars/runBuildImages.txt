@@ -54,7 +54,7 @@ runBuildImages(
 <h3>Outputs</h3>
 
 <ul>
-    <li>Creates <code>image-artifacts/*.docker.tar</code>.</li>
+    <li>Creates Docker archives named from the image reference, for example <code>image-artifacts/user-service_8b42b0c-v1.0-staging.docker.tar</code>.</li>
     <li>Creates <code>image-artifacts/images.txt</code> to map logical image names to archive paths and image references.</li>
     <li>Sets <code>env.BUILT_IMAGE_ARCHIVES</code>.</li>
     <li>Sets <code>env.BUILT_IMAGE_REFS</code>.</li>

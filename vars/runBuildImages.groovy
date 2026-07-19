@@ -177,7 +177,7 @@ private List normalizeImages(
         String tag = dockerTag((image.tag ?: defaultTag).toString(), "Image tag for ${name}")
         String imageRef = image.image ? imageReference(image.image.toString(), "Image reference for ${name}") : imageReference("${name}:${tag}", "Image reference for ${name}")
         String resolvedPlatform = platform((image.platform ?: defaultPlatform).toString(), "Platform for ${name}")
-        String outputName = "${sanitizeForFilename(name)}.docker.tar"
+        String outputName = "${sanitizeForArchiveFilename(imageRef)}.docker.tar"
         String outputFile = "${outputDir}/${outputName}"
         String target = image.target ? Validation.relativePath(image.target.toString(), "Dockerfile target for ${name}") : ''
         Map buildArgs = normalizeBuildArgs(image.buildArgs ?: [:], name)
@@ -311,6 +311,6 @@ private String buildArgName(String value, String label) {
     return value
 }
 
-private String sanitizeForFilename(String value) {
-    return value.replaceAll(/[^A-Za-z0-9_.-]/, '-')
+private String sanitizeForArchiveFilename(String value) {
+    return value.replace(':', '_').replaceAll(/[^A-Za-z0-9_.-]/, '-')
 }
