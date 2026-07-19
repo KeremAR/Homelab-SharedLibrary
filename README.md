@@ -18,6 +18,7 @@ Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes agen
 - `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
 - `jenkins-trivy-cache-pvc` mounted at `/home/jenkins/.cache/trivy`
 - `jenkins-sonar-cache-pvc` mounted at `/home/jenkins/.sonar`
+- `jenkins-docker-cache-pvc` mounted at `/var/lib/docker` in the `docker-dind` sidecar
 - `ghcr-creds` image pull secret
 - `automountServiceAccountToken: false`
 - non-root container execution
@@ -93,6 +94,7 @@ scanner analyzer files reused by later builds.
 - `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
 - `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
+- `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 
 Set `failFast: false` on lint helpers when you want one build to report as
 many lint errors as possible instead of stopping sibling branches early.
@@ -115,6 +117,11 @@ but the sidecar must run privileged. Build output is written as Docker image
 archives under `image-artifacts/` by default. Those archives can later be scanned
 with Trivy using `--input`, loaded with `docker load`, or pushed by a later
 pipeline after loading into a Docker daemon.
+
+Docker layer cache is stored in `jenkins-docker-cache-pvc` through the DinD
+sidecar's `/var/lib/docker` directory. This speeds up repeated image builds, but
+the cache can grow as base images and dependency layers change. Keep an eye on
+the Longhorn volume and prune/resize it when needed.
 
 ## How Python Linting Works
 

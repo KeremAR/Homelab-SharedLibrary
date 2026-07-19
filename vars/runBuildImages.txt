@@ -34,7 +34,6 @@ runBuildImages(
     <li><code>outputDir</code>: Directory for Docker image archives. Default: <code>image-artifacts</code>.</li>
     <li><code>platform</code>: Default target platform. Default: <code>linux/amd64</code>.</li>
     <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>docker</code>.</li>
-    <li><code>dockerHost</code>: Docker daemon endpoint. Default: <code>tcp://localhost:2375</code>.</li>
     <li><code>archiveArtifacts</code>: Archive Docker image tar files in Jenkins. Default: <code>true</code>.</li>
     <li><code>failFast</code>: Whether sibling builds stop after the first failure.</li>
 </ul>

@@ -36,7 +36,8 @@ spec:
       persistentVolumeClaim:
         claimName: jenkins-sonar-cache-pvc
     - name: docker-graph-storage
-      emptyDir: {}
+      persistentVolumeClaim:
+        claimName: jenkins-docker-cache-pvc
   containers:
     - name: jnlp
       image: jenkins/inbound-agent:latest
@@ -162,9 +163,6 @@ spec:
           value: tcp://localhost:2375
         - name: DOCKER_TLS_CERTDIR
           value: ""
-      volumeMounts:
-        - name: tools-cache
-          mountPath: /home/jenkins/agent/tools
       resources:
         requests:
           memory: "256Mi"

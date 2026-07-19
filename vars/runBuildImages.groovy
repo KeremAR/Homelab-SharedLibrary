@@ -6,7 +6,7 @@ import com.company.jenkins.Validation
  * Build one or more container images with Docker-in-Docker and export archives.
  *
  * This library builds Dockerfiles through a Docker CLI container connected to a
- * Docker-in-Docker sidecar over DOCKER_HOST=tcp://localhost:2375. It expects a
+ * Docker-in-Docker sidecar over the pod-local Docker daemon. It expects a
  * Jenkins Kubernetes agent container named `docker` by default.
  *
  * BUILD BEHAVIOR:
@@ -27,7 +27,6 @@ import com.company.jenkins.Validation
  *   - outputDir: Directory for Docker archives (default: 'image-artifacts')
  *   - platform: Default platform (default: 'linux/amd64')
  *   - container: Jenkins Kubernetes container name (default: 'docker')
- *   - dockerHost: Docker daemon endpoint (default: 'tcp://localhost:2375')
  *   - archiveArtifacts: Archive Docker tar files in Jenkins (default: true)
  *   - failFast: Whether parallel image builds should fail fast (default: true)
  *
@@ -65,9 +64,12 @@ def call(Map config = [:]) {
     if (rawImages.isEmpty()) {
         error 'runBuildImages requires images, for example: [images: [[name: "user-service"]]]'
     }
+    if (config.containsKey('dockerHost')) {
+        error 'runBuildImages does not allow dockerHost override; the pod-local Docker daemon is always used'
+    }
 
     String containerName = config.container ?: 'docker'
-    String dockerHost = config.dockerHost ?: 'tcp://localhost:2375'
+    String dockerHost = 'tcp://localhost:2375'
     String outputDir = Validation.relativePath((config.outputDir ?: 'image-artifacts').toString(), 'Image artifact output directory')
     String defaultPlatform = platform((config.platform ?: 'linux/amd64').toString(), 'Default image platform')
     String defaultTag = dockerTag((config.tag ?: 'local').toString(), 'Default image tag')

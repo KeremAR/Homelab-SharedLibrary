@@ -1,0 +1,48 @@
+<h2>runReleaseImages</h2>
+
+Builds the image selected by a release branch and delegates the actual Docker
+build/archive work to <code>runBuildImages</code>.
+
+<h3>Branch Format</h3>
+
+<pre>
+release/&lt;service&gt;-v&lt;version&gt;
+</pre>
+
+For a single-image repository, this is also supported:
+
+<pre>
+release/v&lt;version&gt;
+</pre>
+
+<h3>Example</h3>
+
+<pre>
+runReleaseImages(
+    images: imageBuildConfig.images,
+    outputDir: 'image-artifacts',
+    platform: 'linux/amd64',
+    environment: 'staging',
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Reads the branch name from <code>env.BRANCH_NAME</code> by default.</li>
+    <li>Finds the image whose <code>name</code> matches the service in the branch name.</li>
+    <li>Builds only that image.</li>
+    <li>Creates tags like <code>&lt;commit&gt;-v1.0-staging</code>.</li>
+    <li>Calls <code>runBuildImages</code> with the selected image.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>images</code>: Required list of image maps.</li>
+    <li><code>branchName</code>: Optional branch name override. Default: <code>env.BRANCH_NAME</code>.</li>
+    <li><code>environment</code>: Tag suffix environment. Default: <code>staging</code>.</li>
+    <li><code>releasePrefix</code>: Release branch prefix. Default: <code>release/</code>.</li>
+    <li><code>outputDir</code>, <code>platform</code>, <code>container</code>, <code>archiveArtifacts</code>, <code>failFast</code>: Passed to <code>runBuildImages</code>.</li>
+</ul>
