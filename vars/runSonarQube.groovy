@@ -59,7 +59,6 @@ import com.company.jenkins.Validation
  */
 def call(Map config = [:]) {
     Map settings = normalizeConfig(config)
-    boolean analysisSubmitted = false
 
     Closure runScanner = {
         validateInputFiles(settings)
@@ -99,9 +98,9 @@ def call(Map config = [:]) {
     } else {
         runScanner()
     }
-    analysisSubmitted = true
 
     def qualityGate = null
+    String qualityGateFailureMessage = ''
     if (settings.waitForQualityGate) {
         echo 'Waiting for SonarQube Quality Gate result'
         timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
@@ -113,16 +112,26 @@ def call(Map config = [:]) {
         echo "SonarQube Quality Gate: ${qualityGate.status}"
 
         if (qualityGate.status != 'OK') {
-            if (settings.abortPipeline) {
-                error "SonarQube Quality Gate failed: ${qualityGate.status}"
-            }
-
-            unstable "SonarQube Quality Gate failed: ${qualityGate.status}"
+            qualityGateFailureMessage = "SonarQube Quality Gate failed: ${qualityGate.status}"
         }
     }
 
-    if (analysisSubmitted) {
+    try {
         maybeFetchIssues(settings)
+    } catch (fetchError) {
+        if (!qualityGateFailureMessage) {
+            throw fetchError
+        }
+
+        echo "SonarQube issue fetch also failed: ${fetchError.message}"
+    }
+
+    if (qualityGateFailureMessage) {
+        if (settings.abortPipeline) {
+            error qualityGateFailureMessage
+        }
+
+        unstable qualityGateFailureMessage
     }
 }
 

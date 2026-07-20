@@ -60,7 +60,12 @@ The helper uses <code>withSonarQubeEnv(serverName)</code> to inject the
 SonarQube URL and token configured in Jenkins. It uses
 <code>tool scannerName</code> to find the scanner installed by Jenkins.
 Issue fetch runs after the Quality Gate step so the API does not read stale
-issues from a previous analysis.
+issues from a previous analysis. If the Quality Gate fails, the helper still
+fetches issues first and only then fails or marks the build unstable. This keeps
+the Jenkins log useful: the build shows why the gate failed instead of stopping
+immediately at <code>waitForQualityGate</code>. If issue fetch also fails while
+the Quality Gate has already failed, the helper logs the fetch error but keeps
+the Quality Gate failure as the primary build result.
 Branch, pull request, and new-code filters are used only when explicitly
 configured. This keeps Community Build project analysis from accidentally
 querying an unsupported branch context.
