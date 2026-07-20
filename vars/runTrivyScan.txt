@@ -25,7 +25,7 @@ runTrivyScan(
     <li>Does not require pushing images to a registry.</li>
     <li>Does not require Docker socket access.</li>
     <li>Uses an isolated copy of the persistent Trivy cache per scan.</li>
-    <li>Archives one JSON report and one human-readable table summary per image.</li>
+    <li>Archives one JSON report and one ASCII human-readable summary per image.</li>
     <li>Prints the first part of the table summary to the Jenkins console.</li>
 </ul>
 
@@ -46,6 +46,6 @@ runTrivyScan(
 <h3>Reports</h3>
 
 <ul>
-    <li><code>*.trivy.txt</code>: Human-readable table summary. Use this first when debugging.</li>
+    <li><code>*.trivy.txt</code>: ASCII human-readable summary. Use this first when debugging.</li>
     <li><code>*.trivy.json</code>: Full machine-readable report for detailed processing.</li>
 </ul>

@@ -51,6 +51,7 @@ def call(Map config = [:]) {
         String reportBase = "${outputDir}/${safeFileBase(image.imageRef)}"
         String reportFile = "${reportBase}.trivy.json"
         String summaryFile = "${reportBase}.trivy.txt"
+        String summaryTemplateFile = ".trivy-image-summary-${safeFileBase(image.imageRef)}.tpl"
 
         branches["Trivy image scan: ${image.name}"] = {
             container(containerName) {
@@ -58,6 +59,7 @@ def call(Map config = [:]) {
                     error "Docker image archive does not exist for ${image.name}: ${image.archive}"
                 }
 
+                writeFile file: summaryTemplateFile, text: trivySummaryTemplate()
                 String isolatedCacheDir = "/tmp/trivy-image-${UUID.randomUUID().toString()}"
 
                 withEnv([
@@ -65,7 +67,8 @@ def call(Map config = [:]) {
                     "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
                     "TRIVY_REPORT_FILE=${reportFile}",
-                    "TRIVY_SUMMARY_FILE=${summaryFile}"
+                    "TRIVY_SUMMARY_FILE=${summaryFile}",
+                    "TRIVY_SUMMARY_TEMPLATE=${summaryTemplateFile}"
                 ]) {
                     try {
                         int status = sh(
@@ -92,7 +95,8 @@ def call(Map config = [:]) {
                                     --severity ${Validation.shellQuote(severities)} \\
                                     --scanners vuln \\
                                     --timeout ${Validation.shellQuote(timeout)} \\
-                                    --format table \\
+                                    --format template \\
+                                    --template "@\$TRIVY_SUMMARY_TEMPLATE" \\
                                     --output "\$TRIVY_SUMMARY_FILE"
 
                                 echo "----- Trivy image scan summary: ${image.name} -----"
@@ -199,6 +203,25 @@ private void validateUniqueReports(List images, String outputDir, String extensi
     if (reports.size() != reports.unique().size()) {
         throw new IllegalArgumentException("Duplicate Trivy image report files are not allowed: ${reports}")
     }
+}
+
+private String trivySummaryTemplate() {
+    return '''{{- range .Results }}
+Target: {{ .Target }} ({{ .Type }})
+{{- if .Vulnerabilities }}
+
+ID | Severity | Package | Installed | Fixed | Title
+---|----------|---------|-----------|-------|------
+{{- range .Vulnerabilities }}
+{{ .VulnerabilityID }} | {{ .Severity }} | {{ .PkgName }} | {{ .InstalledVersion }} | {{ if .FixedVersion }}{{ .FixedVersion }}{{ else }}-{{ end }} | {{ .Title }}
+{{- end }}
+{{- else }}
+
+No vulnerabilities found.
+{{- end }}
+
+{{ end -}}
+'''
 }
 
 private String imageReference(String value, String label) {
