@@ -46,7 +46,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "256Mi"
-          cpu: "100m"
+          cpu: "50m"
         limits:
           memory: "1Gi"
           cpu: "1000m"
@@ -69,7 +69,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "256Mi"
-          cpu: "100m"
+          cpu: "75m"
         limits:
           memory: "1Gi"
           cpu: "1000m"
@@ -95,7 +95,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "256Mi"
-          cpu: "100m"
+          cpu: "75m"
         limits:
           memory: "1Gi"
           cpu: "1000m"
@@ -123,7 +123,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "512Mi"
-          cpu: "250m"
+          cpu: "150m"
         limits:
           memory: "2Gi"
           cpu: "1500m"
@@ -141,7 +141,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "64Mi"
-          cpu: "50m"
+          cpu: "25m"
         limits:
           memory: "256Mi"
           cpu: "500m"
@@ -164,7 +164,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "256Mi"
-          cpu: "100m"
+          cpu: "75m"
         limits:
           memory: "1Gi"
           cpu: "1000m"
@@ -185,7 +185,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "512Mi"
-          cpu: "250m"
+          cpu: "200m"
         limits:
           memory: "3Gi"
           cpu: "2000m"
@@ -208,7 +208,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
       resources:
         requests:
           memory: "256Mi"
-          cpu: "100m"
+          cpu: "75m"
         limits:
           memory: "1Gi"
           cpu: "1000m"
