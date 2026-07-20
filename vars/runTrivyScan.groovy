@@ -16,7 +16,7 @@ import com.company.jenkins.Validation
  * - Does not require Docker socket access
  * - Uses the `trivy` Kubernetes container directly
  * - Uses an isolated copy of the persistent Trivy DB cache per image
- * - Archives one JSON report per image
+ * - Archives one JSON report and one human-readable table summary per image
  *
  * @param config Map containing:
  *   - imageManifest: images.txt path from runBuildImages (default: 'image-artifacts/images.txt')
@@ -48,7 +48,9 @@ def call(Map config = [:]) {
 
     Map branches = [:]
     images.each { image ->
-        String reportFile = "${outputDir}/${safeFileBase(image.imageRef)}.trivy.json"
+        String reportBase = "${outputDir}/${safeFileBase(image.imageRef)}"
+        String reportFile = "${reportBase}.trivy.json"
+        String summaryFile = "${reportBase}.trivy.txt"
 
         branches["Trivy image scan: ${image.name}"] = {
             container(containerName) {
@@ -62,7 +64,8 @@ def call(Map config = [:]) {
                     "TRIVY_SOURCE_CACHE=${cacheDir}",
                     "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
-                    "TRIVY_REPORT_FILE=${reportFile}"
+                    "TRIVY_REPORT_FILE=${reportFile}",
+                    "TRIVY_SUMMARY_FILE=${summaryFile}"
                 ]) {
                     try {
                         int status = sh(
@@ -85,14 +88,44 @@ def call(Map config = [:]) {
                                     --skip-db-update \\
                                     --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
                                     ${skipDirFlags} \\
+                                    --exit-code 0 \\
+                                    --severity ${Validation.shellQuote(severities)} \\
+                                    --scanners vuln \\
+                                    --timeout ${Validation.shellQuote(timeout)} \\
+                                    --format table \\
+                                    --output "\$TRIVY_SUMMARY_FILE"
+
+                                echo "----- Trivy image scan summary: ${image.name} -----"
+                                if [ -s "\$TRIVY_SUMMARY_FILE" ]; then
+                                    sed -n '1,220p' "\$TRIVY_SUMMARY_FILE"
+                                    SUMMARY_LINES=\$(wc -l < "\$TRIVY_SUMMARY_FILE" | tr -d ' ')
+                                    if [ "\$SUMMARY_LINES" -gt 220 ]; then
+                                        echo "... summary truncated in console; full report is archived at \$TRIVY_SUMMARY_FILE"
+                                    fi
+                                else
+                                    echo "Trivy summary report is empty: \$TRIVY_SUMMARY_FILE"
+                                fi
+
+                                TRIVY_STATUS=0
+                                trivy image \\
+                                    --input "\$TRIVY_IMAGE_ARCHIVE" \\
+                                    --skip-db-update \\
+                                    --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
+                                    ${skipDirFlags} \\
                                     --exit-code ${exitCode} \\
                                     --severity ${Validation.shellQuote(severities)} \\
                                     --scanners vuln \\
                                     --timeout ${Validation.shellQuote(timeout)} \\
                                     --format json \\
-                                    --output "\$TRIVY_REPORT_FILE"
+                                    --output "\$TRIVY_REPORT_FILE" || TRIVY_STATUS=\$?
+
+                                exit "\$TRIVY_STATUS"
                             """
                         )
+
+                        if (!fileExists(summaryFile)) {
+                            error "Trivy image summary was not generated for ${image.name}: ${summaryFile}"
+                        }
 
                         if (!fileExists(reportFile)) {
                             error "Trivy image report was not generated for ${image.name}: ${reportFile}"
@@ -100,12 +133,12 @@ def call(Map config = [:]) {
 
                         archiveArtifacts(
                             allowEmptyArchive: false,
-                            artifacts: reportFile,
+                            artifacts: "${summaryFile},${reportFile}",
                             fingerprint: true
                         )
 
                         if (status != 0) {
-                            error "Trivy image scan failed for ${image.name}. See ${reportFile}"
+                            error "Trivy image scan failed for ${image.name}. See ${summaryFile} and ${reportFile}"
                         }
                     } finally {
                         int cleanupStatus = sh(
