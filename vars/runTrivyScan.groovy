@@ -206,7 +206,7 @@ private void validateUniqueReports(List images, String outputDir, String extensi
 }
 
 private String trivySummaryTemplate() {
-    return '''{{- range .Results }}
+    return '''{{- range . }}
 Target: {{ .Target }} ({{ .Type }})
 {{- if .Vulnerabilities }}
 
