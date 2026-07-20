@@ -66,6 +66,9 @@ the Jenkins log useful: the build shows why the gate failed instead of stopping
 immediately at <code>waitForQualityGate</code>. If issue fetch also fails while
 the Quality Gate has already failed, the helper logs the fetch error but keeps
 the Quality Gate failure as the primary build result.
+If <code>waitForQualityGate</code> itself cannot reach SonarQube, the same
+<code>abortPipeline</code> policy applies: <code>true</code> fails the build,
+<code>false</code> marks it unstable and lets later stages continue.
 Branch, pull request, and new-code filters are used only when explicitly
 configured. This keeps Community Build project analysis from accidentally
 querying an unsupported branch context.

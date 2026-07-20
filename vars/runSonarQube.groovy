@@ -100,11 +100,16 @@ def call(Map config = [:]) {
     }
 
     def qualityGate = null
-    String qualityGateFailureMessage = ''
+    String sonarFailureMessage = ''
     if (settings.waitForQualityGate) {
         echo 'Waiting for SonarQube Quality Gate result'
-        timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
-            qualityGate = waitForQualityGate abortPipeline: false
+        try {
+            timeout(time: settings.timeoutMinutes, unit: 'MINUTES') {
+                qualityGate = waitForQualityGate abortPipeline: false
+            }
+        } catch (qualityGateError) {
+            sonarFailureMessage = "SonarQube Quality Gate wait failed: ${qualityGateError.message}"
+            echo sonarFailureMessage
         }
     }
 
@@ -112,26 +117,26 @@ def call(Map config = [:]) {
         echo "SonarQube Quality Gate: ${qualityGate.status}"
 
         if (qualityGate.status != 'OK') {
-            qualityGateFailureMessage = "SonarQube Quality Gate failed: ${qualityGate.status}"
+            sonarFailureMessage = "SonarQube Quality Gate failed: ${qualityGate.status}"
         }
     }
 
     try {
         maybeFetchIssues(settings)
     } catch (fetchError) {
-        if (!qualityGateFailureMessage) {
+        if (!sonarFailureMessage) {
             throw fetchError
         }
 
         echo "SonarQube issue fetch also failed: ${fetchError.message}"
     }
 
-    if (qualityGateFailureMessage) {
+    if (sonarFailureMessage) {
         if (settings.abortPipeline) {
-            error qualityGateFailureMessage
+            error sonarFailureMessage
         }
 
-        unstable qualityGateFailureMessage
+        unstable sonarFailureMessage
     }
 }
 
