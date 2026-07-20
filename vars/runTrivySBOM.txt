@@ -1,0 +1,42 @@
+<h2>runTrivySBOM</h2>
+
+<p>
+Generates SBOM files from Docker image archive artifacts using Trivy.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runTrivySBOM(
+    imageManifest: 'image-artifacts/images.txt',
+    outputDir: 'sbom-reports',
+    format: 'cyclonedx',
+    skipDirs: ['**/node_modules'],
+    uploadToDependencyTrack: false,
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Reads <code>images.txt</code> by default.</li>
+    <li>Generates one SBOM file per Docker archive.</li>
+    <li>Archives SBOM files and <code>sboms.txt</code> in Jenkins.</li>
+    <li>Can optionally upload generated SBOMs to Dependency-Track.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>imageManifest</code>: Path to the manifest written by <code>runBuildImages</code>. Default: <code>image-artifacts/images.txt</code>.</li>
+    <li><code>format</code>: SBOM format. Allowed: <code>cyclonedx</code>, <code>spdx</code>, <code>spdx-json</code>, <code>json</code>. Default: <code>cyclonedx</code>.</li>
+    <li><code>outputDir</code>: SBOM directory. Default: <code>sbom-reports</code>.</li>
+    <li><code>skipDirs</code>: Optional image-internal directories that Trivy should skip.</li>
+    <li><code>uploadToDependencyTrack</code>: Upload generated SBOMs. Default: <code>false</code>.</li>
+    <li><code>dependencyTrackUrl</code>: Dependency-Track API server URL.</li>
+    <li><code>dependencyTrackCredentialsId</code>: Jenkins Secret Text credential id. Default: <code>dependency-track-api-key</code>.</li>
+    <li><code>dependencyTrackAutoCreate</code>: Auto-create Dependency-Track projects. Default: <code>true</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>trivy</code>.</li>
+    <li><code>failFast</code>: Whether sibling SBOM jobs stop after the first failure.</li>
+</ul>

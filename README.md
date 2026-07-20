@@ -100,6 +100,9 @@ scanner analyzer files reused by later builds.
 - `runTrivyFSScan(targets: [...])` scans application files and dependency lock files.
 - `runTrivySecretScan(targets: [...])` scans repository content for secrets.
 - `runTrivyIaCscan(targets: [...])` scans Kubernetes, Terraform, Compose, and other IaC files when the repository owns infrastructure manifests.
+- `runTrivyScan(imageManifest: '...')` scans built Docker image archives.
+- `runTrivySBOM(imageManifest: '...')` generates SBOMs from built Docker image archives.
+- `uploadSBOMsToDependencyTrack(sboms: [...])` uploads SBOMs to Dependency-Track.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 
@@ -247,6 +250,60 @@ That timing is why a Jenkins `lock { ... }` inside the build stage is not enough
 to protect a shared `/var/lib/docker` PVC. By the time the stage starts, the pod
 has already mounted the volume and the Docker daemon may already be running.
 `ReadWriteOncePod` moves the protection to Kubernetes volume attachment time.
+
+## Image Security Scan And SBOM
+
+Release branches run image security checks after `Build Images` because the
+scan target is the Docker archive produced by `docker save`, not a registry
+image.
+
+```text
+Build Images
+  -> image-artifacts/<image>.docker.tar
+  -> image-artifacts/images.txt
+
+Image Security Scan
+  -> runTrivyScan(imageManifest: 'image-artifacts/images.txt')
+  -> trivy image --input image-artifacts/<image>.docker.tar
+  -> trivy-image-reports/<image>.trivy.json
+
+Generate Image SBOM
+  -> runTrivySBOM(imageManifest: 'image-artifacts/images.txt')
+  -> trivy image --input image-artifacts/<image>.docker.tar --format cyclonedx
+  -> sbom-reports/<image>.cyclonedx.json
+  -> optional upload to Dependency-Track
+```
+
+`runTrivyScan()` and `runTrivySBOM()` both read `images.txt` by default. This
+keeps the image reference, archive path, service name, and platform aligned with
+the build step. Neither helper needs the image to be pushed to GHCR first.
+
+Image vulnerability scans use the same Trivy cache pattern as filesystem scans:
+
+```text
+persistent cache
+  /home/jenkins/.cache/trivy
+
+per-image isolated cache
+  /tmp/trivy-image-<uuid>
+```
+
+The persistent cache is updated by `ensureTrivyDB()`. Each image scan copies
+that cache into a temporary directory and runs with `--skip-db-update`, so
+parallel scans do not write to the same DB files.
+
+SBOM generation defaults to CycloneDX because Dependency-Track consumes
+CycloneDX natively. When `uploadToDependencyTrack: true`, `runTrivySBOM()` calls
+`uploadSBOMsToDependencyTrack()` with one project per image by default:
+
+```text
+projectName    = image name, e.g. user-service
+projectVersion = image tag, e.g. abc1234-v1.0-staging
+```
+
+The upload helper uses Dependency-Track's REST API and a Jenkins Secret Text
+credential named `dependency-track-api-key`. It does not require the Jenkins
+Dependency-Track plugin.
 
 ## How Python Linting Works
 

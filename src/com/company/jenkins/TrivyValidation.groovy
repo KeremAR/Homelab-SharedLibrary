@@ -71,11 +71,39 @@ class TrivyValidation implements Serializable {
             throw new IllegalArgumentException("${label} cannot be empty")
         }
 
-        if (value.contains('..') || value.startsWith('-')) {
+        if (value.startsWith('/') || value.contains('..') || value.startsWith('-')) {
             throw new IllegalArgumentException("Invalid ${label}: ${value}")
         }
 
         if (!(value ==~ /^[A-Za-z0-9._:*?\\\/-]+$/)) {
+            throw new IllegalArgumentException("Invalid characters in ${label}: ${value}")
+        }
+
+        return value
+    }
+
+    static List<String> skipPaths(List values, String label = 'Trivy skip path') {
+        List<String> paths = values.collect { value ->
+            skipPath(value.toString(), label)
+        }
+
+        if (paths.size() != paths.unique().size()) {
+            throw new IllegalArgumentException("Duplicate ${label} values are not allowed: ${paths}")
+        }
+
+        return paths
+    }
+
+    static String skipPath(String value, String label = 'Trivy skip path') {
+        if (!value) {
+            throw new IllegalArgumentException("${label} cannot be empty")
+        }
+
+        if (value.startsWith('/') || value.contains('..') || value.startsWith('-')) {
+            throw new IllegalArgumentException("Invalid ${label}: ${value}")
+        }
+
+        if (!(value ==~ /^[A-Za-z0-9._*?\/-]+$/)) {
             throw new IllegalArgumentException("Invalid characters in ${label}: ${value}")
         }
 

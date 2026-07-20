@@ -1,0 +1,33 @@
+<h2>uploadSBOMsToDependencyTrack</h2>
+
+<p>
+Uploads SBOM files to Dependency-Track through the REST API.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+uploadSBOMsToDependencyTrack(
+    sboms: [
+        [
+            file: 'sbom-reports/user-service_abc123-v1.0-staging.cyclonedx.json',
+            projectName: 'user-service',
+            projectVersion: 'abc123-v1.0-staging'
+        ]
+    ],
+    dependencyTrackUrl: 'http://dtrack-dependency-track-api-server.dependency-track.svc.cluster.local:8080',
+    credentialsId: 'dependency-track-api-key',
+    autoCreate: true
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>sboms</code>: Required list of maps with <code>file</code>, <code>projectName</code>, and <code>projectVersion</code>.</li>
+    <li><code>dependencyTrackUrl</code>: API server base URL.</li>
+    <li><code>credentialsId</code>: Jenkins Secret Text credential id. Default: <code>dependency-track-api-key</code>.</li>
+    <li><code>autoCreate</code>: Auto-create projects during upload. Default: <code>true</code>.</li>
+    <li><code>failOnUploadError</code>: Fail the build if upload fails. Default: <code>true</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>python</code>.</li>
+</ul>

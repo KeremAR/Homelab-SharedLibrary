@@ -1,0 +1,43 @@
+<h2>runTrivyScan</h2>
+
+<p>
+Runs Trivy vulnerability scans against Docker image archive artifacts generated
+by <code>runBuildImages</code> or <code>runReleaseImages</code>.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+runTrivyScan(
+    imageManifest: 'image-artifacts/images.txt',
+    outputDir: 'trivy-image-reports',
+    severities: 'HIGH,CRITICAL',
+    failOnVulnerabilities: true,
+    failFast: false
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Reads <code>images.txt</code> by default.</li>
+    <li>Scans <code>.docker.tar</code> archives with <code>trivy image --input</code>.</li>
+    <li>Does not require pushing images to a registry.</li>
+    <li>Does not require Docker socket access.</li>
+    <li>Uses an isolated copy of the persistent Trivy cache per scan.</li>
+    <li>Archives one JSON report per image.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>imageManifest</code>: Path to the manifest written by <code>runBuildImages</code>. Default: <code>image-artifacts/images.txt</code>.</li>
+    <li><code>imageArchives</code>: Optional explicit list of Docker archive paths.</li>
+    <li><code>imageRefs</code>: Optional image references matching <code>imageArchives</code>.</li>
+    <li><code>outputDir</code>: Report directory. Default: <code>trivy-image-reports</code>.</li>
+    <li><code>severities</code>: CSV severity filter. Default: <code>HIGH,CRITICAL</code>.</li>
+    <li><code>failOnVulnerabilities</code>: Fail the build when findings exist. Default: <code>true</code>.</li>
+    <li><code>timeout</code>: Trivy timeout. Default: <code>15m</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>trivy</code>.</li>
+    <li><code>failFast</code>: Whether sibling image scans stop after the first failure.</li>
+</ul>
