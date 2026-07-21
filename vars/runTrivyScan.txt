@@ -34,7 +34,7 @@ runTrivyScan(
 <ul>
     <li><code>imageManifest</code>: Path to the manifest written by <code>runBuildImages</code>. Default: <code>image-artifacts/images.txt</code>.</li>
     <li><code>imageArchives</code>: Optional explicit list of Docker archive paths.</li>
-    <li><code>imageRefs</code>: Optional image references matching <code>imageArchives</code>.</li>
+    <li><code>imageRefs</code>: Required image references when <code>imageArchives</code> is provided.</li>
     <li><code>outputDir</code>: Report directory. Default: <code>trivy-image-reports</code>.</li>
     <li><code>severities</code>: CSV severity filter. Default: <code>HIGH,CRITICAL</code>.</li>
     <li><code>failOnVulnerabilities</code>: Fail the build when findings exist. Default: <code>true</code>.</li>

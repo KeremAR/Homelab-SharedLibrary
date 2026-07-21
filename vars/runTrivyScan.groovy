@@ -21,7 +21,7 @@ import com.company.jenkins.Validation
  * @param config Map containing:
  *   - imageManifest: images.txt path from runBuildImages (default: 'image-artifacts/images.txt')
  *   - imageArchives: Optional explicit list of Docker archive paths
- *   - imageRefs: Optional image references matching imageArchives
+ *   - imageRefs: Required image references when imageArchives is provided
  *   - outputDir: Directory for Trivy image scan reports (default: 'trivy-image-reports')
  *   - severities: CSV severity list (default: 'HIGH,CRITICAL')
  *   - failOnVulnerabilities: Fail build when findings exist (default: true)
@@ -45,6 +45,7 @@ def call(Map config = [:]) {
 
     List images = resolveImages(config)
     validateUniqueReports(images, outputDir, '.trivy.json')
+    validateUniqueReports(images, outputDir, '.trivy.txt')
 
     Map branches = [:]
     images.each { image ->
@@ -77,6 +78,8 @@ def call(Map config = [:]) {
                             script: """
                                 set -eu
                                 mkdir -p "\$TRIVY_ISOLATED_CACHE" "\$WORKSPACE/${outputDir}"
+                                rm -f "\$TRIVY_SUMMARY_FILE" "\$TRIVY_REPORT_FILE"
+
                                 if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
                                     for ITEM in "\$TRIVY_SOURCE_CACHE"/* "\$TRIVY_SOURCE_CACHE"/.[!.]* "\$TRIVY_SOURCE_CACHE"/..?*; do
                                         [ -e "\$ITEM" ] || continue
@@ -166,10 +169,14 @@ def call(Map config = [:]) {
 
 private List resolveImages(Map config) {
     if (config.imageArchives) {
+        if (!config.imageRefs) {
+            throw new IllegalArgumentException('imageRefs is required when imageArchives is provided')
+        }
+
         List archives = config.imageArchives.collect { value ->
             Validation.relativePath(value.toString(), 'Docker image archive')
         }
-        List refs = (config.imageRefs ?: archives).collect { value ->
+        List refs = config.imageRefs.collect { value ->
             imageReference(value.toString(), 'Docker image reference')
         }
 

@@ -262,21 +262,27 @@ Build Images
   -> image-artifacts/<image>.docker.tar
   -> image-artifacts/images.txt
 
-Image Security Scan
-  -> runTrivyScan(imageManifest: 'image-artifacts/images.txt')
-  -> trivy image --input image-artifacts/<image>.docker.tar
-  -> trivy-image-reports/<image>.trivy.json
-
 Generate Image SBOM
   -> runTrivySBOM(imageManifest: 'image-artifacts/images.txt')
   -> trivy image --input image-artifacts/<image>.docker.tar --format cyclonedx
   -> sbom-reports/<image>.cyclonedx.json
   -> optional upload to Dependency-Track
+
+Image Security Scan
+  -> runTrivyScan(imageManifest: 'image-artifacts/images.txt')
+  -> trivy image --input image-artifacts/<image>.docker.tar
+  -> trivy-image-reports/<image>.trivy.txt
+  -> trivy-image-reports/<image>.trivy.json
+  -> optional vulnerability gate
 ```
 
 `runTrivyScan()` and `runTrivySBOM()` both read `images.txt` by default. This
 keeps the image reference, archive path, service name, and platform aligned with
 the build step. Neither helper needs the image to be pushed to GHCR first.
+
+SBOM generation runs before the image vulnerability gate. This keeps the
+supply-chain artifact available even when the vulnerability policy later fails
+the build.
 
 Image vulnerability scans use the same Trivy cache pattern as filesystem scans:
 
@@ -293,8 +299,10 @@ that cache into a temporary directory and runs with `--skip-db-update`, so
 parallel scans do not write to the same DB files.
 
 SBOM generation defaults to CycloneDX because Dependency-Track consumes
-CycloneDX natively. When `uploadToDependencyTrack: true`, `runTrivySBOM()` calls
-`uploadSBOMsToDependencyTrack()` with one project per image by default:
+CycloneDX natively. SBOM generation does not copy the Trivy vulnerability DB
+cache because it is not doing vulnerability scanning. When
+`uploadToDependencyTrack: true`, `runTrivySBOM()` requires `format: 'cyclonedx'`
+and calls `uploadSBOMsToDependencyTrack()` with one project per image by default:
 
 ```text
 projectName    = image name, e.g. user-service

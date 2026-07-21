@@ -7,23 +7,21 @@ import com.company.jenkins.Validation
 /**
  * Generate SBOM files from Docker image archive artifacts with Trivy.
  *
- * This helper runs after image build and usually after image vulnerability
- * scanning. It reads the runBuildImages images.txt manifest, generates one SBOM
- * per Docker archive, archives those SBOMs in Jenkins, and can optionally upload
- * them to Dependency-Track.
+ * This helper runs after image build. It reads the runBuildImages images.txt
+ * manifest, generates one SBOM per Docker archive, archives those SBOMs in
+ * Jenkins, and can optionally upload them to Dependency-Track.
  *
  * @param config Map containing:
  *   - imageManifest: images.txt path from runBuildImages (default: 'image-artifacts/images.txt')
  *   - imageArchives: Optional explicit list of Docker archive paths
- *   - imageRefs: Optional image references matching imageArchives
+ *   - imageRefs: Required image references when imageArchives is provided
  *   - format: SBOM format: cyclonedx, spdx, spdx-json, json (default: 'cyclonedx')
  *   - outputDir: Directory for SBOM files (default: 'sbom-reports')
  *   - timeout: Trivy timeout (default: '15m')
  *   - skipDirs: Image-internal directories to skip
- *   - cacheDir: Persistent Trivy cache path (default: '/home/jenkins/.cache/trivy')
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
  *   - failFast: Whether sibling SBOM jobs stop after the first failure (default: true)
- *   - uploadToDependencyTrack: Upload generated SBOMs (default: false)
+ *   - uploadToDependencyTrack: Upload generated CycloneDX SBOMs (default: false)
  *   - dependencyTrackUrl: Dependency-Track API base URL
  *   - dependencyTrackCredentialsId: Jenkins Secret Text credential id
  *   - dependencyTrackProjectName: Optional fixed project name
@@ -35,11 +33,14 @@ def call(Map config = [:]) {
     String format = sbomFormat((config.format ?: 'cyclonedx').toString())
     String timeout = TrivyValidation.timeout((config.timeout ?: '15m').toString(), 'Trivy SBOM timeout')
     List skipDirs = TrivyValidation.skipPaths(config.skipDirs ?: [], 'Trivy SBOM skip directory')
-    String cacheDir = TrivyValidation.cachePath((config.cacheDir ?: '/home/jenkins/.cache/trivy').toString(), 'Trivy cache directory')
     String containerName = config.container ?: 'trivy'
     boolean failFast = config.get('failFast', true)
     boolean uploadEnabled = config.get('uploadToDependencyTrack', false)
     String skipDirFlags = skipDirs.collect { dir -> "--skip-dirs ${Validation.shellQuote(dir)}" }.join(' ')
+
+    if (uploadEnabled && format != 'cyclonedx') {
+        error 'Dependency-Track upload requires CycloneDX SBOM format'
+    }
 
     List images = resolveImages(config).collect { image ->
         image + [
@@ -56,58 +57,34 @@ def call(Map config = [:]) {
                     error "Docker image archive does not exist for ${image.name}: ${image.archive}"
                 }
 
-                String isolatedCacheDir = "/tmp/trivy-sbom-${UUID.randomUUID().toString()}"
-
                 withEnv([
-                    "TRIVY_SOURCE_CACHE=${cacheDir}",
-                    "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
                     "TRIVY_SBOM_FILE=${image.sbomFile}"
                 ]) {
-                    try {
-                        int status = sh(
-                            label: "Generate SBOM: ${image.name}",
-                            returnStatus: true,
-                            script: """
-                                set -eu
-                                mkdir -p "\$TRIVY_ISOLATED_CACHE" "\$WORKSPACE/${outputDir}"
-                                if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
-                                    for ITEM in "\$TRIVY_SOURCE_CACHE"/* "\$TRIVY_SOURCE_CACHE"/.[!.]* "\$TRIVY_SOURCE_CACHE"/..?*; do
-                                        [ -e "\$ITEM" ] || continue
-                                        [ "\$(basename "\$ITEM")" = "lost+found" ] && continue
-                                        cp -R "\$ITEM" "\$TRIVY_ISOLATED_CACHE"/
-                                    done
-                                fi
+                    int status = sh(
+                        label: "Generate SBOM: ${image.name}",
+                        returnStatus: true,
+                        script: """
+                            set -eu
+                            mkdir -p "\$WORKSPACE/${outputDir}"
+                            rm -f "\$TRIVY_SBOM_FILE"
 
-                                cd "\$WORKSPACE"
-                                trivy image \\
-                                    --input "\$TRIVY_IMAGE_ARCHIVE" \\
-                                    --skip-db-update \\
-                                    --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                                    ${skipDirFlags} \\
-                                    --timeout ${Validation.shellQuote(timeout)} \\
-                                    --format ${Validation.shellQuote(format)} \\
-                                    --output "\$TRIVY_SBOM_FILE"
-                            """
-                        )
+                            cd "\$WORKSPACE"
+                            trivy image \\
+                                --input "\$TRIVY_IMAGE_ARCHIVE" \\
+                                ${skipDirFlags} \\
+                                --timeout ${Validation.shellQuote(timeout)} \\
+                                --format ${Validation.shellQuote(format)} \\
+                                --output "\$TRIVY_SBOM_FILE"
+                        """
+                    )
 
-                        if (status != 0) {
-                            error "Trivy SBOM generation failed for ${image.name}"
-                        }
+                    if (status != 0) {
+                        error "Trivy SBOM generation failed for ${image.name}"
+                    }
 
-                        if (!fileExists(image.sbomFile)) {
-                            error "SBOM file was not generated for ${image.name}: ${image.sbomFile}"
-                        }
-                    } finally {
-                        int cleanupStatus = sh(
-                            label: "Clean Trivy SBOM cache: ${image.name}",
-                            returnStatus: true,
-                            script: 'rm -rf "$TRIVY_ISOLATED_CACHE"'
-                        )
-
-                        if (cleanupStatus != 0) {
-                            echo "WARNING: Trivy SBOM temporary cache cleanup failed for ${image.name}."
-                        }
+                    if (!fileExists(image.sbomFile)) {
+                        error "SBOM file was not generated for ${image.name}: ${image.sbomFile}"
                     }
                 }
             }
@@ -119,7 +96,7 @@ def call(Map config = [:]) {
     writeSbomManifest(images, outputDir)
     archiveArtifacts(
         allowEmptyArchive: false,
-        artifacts: "${outputDir}/*,${outputDir}/sboms.txt",
+        artifacts: (images.collect { it.sbomFile } + ["${outputDir}/sboms.txt"]).join(','),
         fingerprint: true
     )
 
@@ -145,10 +122,14 @@ def call(Map config = [:]) {
 
 private List resolveImages(Map config) {
     if (config.imageArchives) {
+        if (!config.imageRefs) {
+            throw new IllegalArgumentException('imageRefs is required when imageArchives is provided')
+        }
+
         List archives = config.imageArchives.collect { value ->
             Validation.relativePath(value.toString(), 'Docker image archive')
         }
-        List refs = (config.imageRefs ?: archives).collect { value ->
+        List refs = config.imageRefs.collect { value ->
             imageReference(value.toString(), 'Docker image reference')
         }
 

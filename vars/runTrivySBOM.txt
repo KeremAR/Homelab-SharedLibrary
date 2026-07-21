@@ -22,8 +22,9 @@ runTrivySBOM(
 <ul>
     <li>Reads <code>images.txt</code> by default.</li>
     <li>Generates one SBOM file per Docker archive.</li>
+    <li>Does not copy or require the Trivy vulnerability DB cache for SBOM generation.</li>
     <li>Archives SBOM files and <code>sboms.txt</code> in Jenkins.</li>
-    <li>Can optionally upload generated SBOMs to Dependency-Track.</li>
+    <li>Can optionally upload generated CycloneDX SBOMs to Dependency-Track.</li>
 </ul>
 
 <h3>Parameters</h3>
@@ -40,3 +41,10 @@ runTrivySBOM(
     <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>trivy</code>.</li>
     <li><code>failFast</code>: Whether sibling SBOM jobs stop after the first failure.</li>
 </ul>
+
+<p>
+When <code>uploadToDependencyTrack</code> is true, <code>format</code> must be
+<code>cyclonedx</code>. If explicit <code>imageArchives</code> are used instead
+of <code>imageManifest</code>, matching <code>imageRefs</code> are required so
+Dependency-Track project versions are meaningful.
+</p>
