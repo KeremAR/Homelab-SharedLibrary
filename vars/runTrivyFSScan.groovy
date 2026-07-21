@@ -7,9 +7,8 @@ import com.company.jenkins.Validation
  * Run Trivy filesystem vulnerability scanning.
  *
  * This scans dependency manifests and lock files without building Docker images.
- * It uses an isolated copy of the persistent Trivy cache outside the workspace
- * so parallel scans do not share writable DB files and Trivy does not scan its
- * own temporary cache.
+ * It reads the persistent Trivy DB cache prepared by ensureTrivyDB, skips DB
+ * updates during scans, and keeps Trivy's scan cache in memory.
  *
  * @param config Map containing:
  *   - target: Repository-relative path to scan (default: '.')
@@ -48,52 +47,29 @@ def call(Map config = [:]) {
             error "Trivy filesystem target does not exist: ${target}"
         }
 
-        String isolatedCacheDir = "/tmp/trivy-fs-${UUID.randomUUID().toString()}"
-
         withEnv([
-            "TRIVY_SOURCE_CACHE=${cacheDir}",
-            "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
+            "TRIVY_CACHE_DIR=${cacheDir}",
             "TRIVY_TARGET=${target}"
         ]) {
-            try {
-                sh(
-                    label: "Trivy FS scan: ${target}",
-                    script: """
-                        set -eu
-                        mkdir -p "\$TRIVY_ISOLATED_CACHE"
-                        if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
-                            for ITEM in "\$TRIVY_SOURCE_CACHE"/* "\$TRIVY_SOURCE_CACHE"/.[!.]* "\$TRIVY_SOURCE_CACHE"/..?*; do
-                                [ -e "\$ITEM" ] || continue
-                                [ "\$(basename "\$ITEM")" = "lost+found" ] && continue
-                                cp -R "\$ITEM" "\$TRIVY_ISOLATED_CACHE"/
-                            done
-                        fi
-
-                        cd "\$WORKSPACE"
-                        trivy fs \\
-                            --skip-db-update \\
-                            --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                            ${skipDirFlags} \\
-                            ${filePatternFlags} \\
-                            ${includeDevDepsFlag} \\
-                            --exit-code ${exitCode} \\
-                            --severity ${Validation.shellQuote(severities)} \\
-                            --scanners vuln \\
-                            --timeout ${Validation.shellQuote(timeout)} \\
-                            "\$TRIVY_TARGET"
-                    """
-                )
-            } finally {
-                int cleanupStatus = sh(
-                    label: "Clean Trivy FS cache: ${target}",
-                    returnStatus: true,
-                    script: 'rm -rf "$TRIVY_ISOLATED_CACHE"'
-                )
-
-                if (cleanupStatus != 0) {
-                    echo "WARNING: Trivy filesystem temporary cache cleanup failed."
-                }
-            }
+            sh(
+                label: "Trivy FS scan: ${target}",
+                script: """
+                    set -eu
+                    cd "\$WORKSPACE"
+                    trivy fs \\
+                        --skip-db-update \\
+                        --cache-dir "\$TRIVY_CACHE_DIR" \\
+                        --cache-backend memory \\
+                        ${skipDirFlags} \\
+                        ${filePatternFlags} \\
+                        ${includeDevDepsFlag} \\
+                        --exit-code ${exitCode} \\
+                        --severity ${Validation.shellQuote(severities)} \\
+                        --scanners vuln \\
+                        --timeout ${Validation.shellQuote(timeout)} \\
+                        "\$TRIVY_TARGET"
+                """
+            )
         }
     }
 }

@@ -284,23 +284,33 @@ SBOM generation runs before the image vulnerability gate. This keeps the
 supply-chain artifact available even when the vulnerability policy later fails
 the build.
 
-Image vulnerability scans use the same Trivy cache pattern as filesystem scans:
+Image vulnerability scans use the persistent Trivy DB cache directly:
 
 ```text
 persistent cache
   /home/jenkins/.cache/trivy
-
-per-image isolated cache
-  /tmp/trivy-image-<uuid>
 ```
 
-The persistent cache is updated by `ensureTrivyDB()`. Each image scan copies
-that cache into a temporary directory and runs with `--skip-db-update`, so
-parallel scans do not write to the same DB files.
+The persistent cache is updated by `ensureTrivyDB()` before scans begin. Image
+scans run with `--skip-db-update`, `--cache-dir /home/jenkins/.cache/trivy`,
+and `--cache-backend memory`. The PVC-backed cache provides the vulnerability
+DB, while Trivy's per-process scan cache stays in memory and avoids filesystem
+cache locking between parallel image scans. This replaces the older pattern of
+copying the whole Trivy cache into `/tmp/trivy-image-<uuid>` for every scan.
+
+Repository scans and image scans use different skip lists. Filesystem and
+secret scans receive repository-relative paths such as `frontend/node_modules`,
+`.venvs`, `.git`, and `coverage-reports`. Image scans receive image-internal
+paths such as `/app/tmp` only when there is a specific reason to skip something.
+In most builds `trivyImageSkipDirs` should stay empty.
 
 SBOM generation defaults to CycloneDX because Dependency-Track consumes
 CycloneDX natively. SBOM generation does not copy the Trivy vulnerability DB
-cache because it is not doing vulnerability scanning. When
+cache because it is not doing vulnerability scanning. It uses Trivy's memory
+cache backend for runtime state. Do not pass repository dependency skip dirs to
+SBOM generation: the point of SBOM is a complete image component inventory, so
+skipping `node_modules` or Python package directories can hide components from
+Dependency-Track. When
 `uploadToDependencyTrack: true`, `runTrivySBOM()` requires `format: 'cyclonedx'`
 and calls `uploadSBOMsToDependencyTrack()` with one project per image by default:
 
@@ -871,7 +881,7 @@ stage('Static Security Scan') {
       steps {
         runTrivyFSScan(
           target: '.',
-          skipDirs: securityConfig.trivySkipDirs,
+          skipDirs: securityConfig.trivyFsSkipDirs,
           failOnVulnerabilities: true
         )
       }
@@ -881,7 +891,7 @@ stage('Static Security Scan') {
       steps {
         runTrivySecretScan(
           target: '.',
-          skipDirs: securityConfig.trivySkipDirs,
+          skipDirs: securityConfig.trivyFsSkipDirs,
           failOnSecrets: true
         )
       }
@@ -919,37 +929,28 @@ updates the DB while the others wait for the Jenkins lock instead of racing on
 the same cache files. The Jenkins controller must have the `lockable-resources`
 plugin installed for this helper.
 
-Each scan uses an isolated copy of the persistent cache:
+Scans use the persistent Trivy DB cache directly and keep the runtime scan cache
+in memory:
 
 ```text
 persistent PVC cache
   /home/jenkins/.cache/trivy
-
-temporary scan copy
-  /tmp/trivy-fs-<uuid>
-  /tmp/trivy-iac-<uuid>
 ```
 
-The vulnerability and IaC helpers copy the persistent cache into a temporary
-cache outside the workspace and run Trivy with `--skip-db-update`:
+The vulnerability and IaC helpers run Trivy with `--skip-db-update`,
+`--cache-dir`, and `--cache-backend memory`:
 
 ```bash
-cp -R "$TRIVY_SOURCE_CACHE"/<trivy-cache-files> "$TRIVY_ISOLATED_CACHE"/
-trivy fs --skip-db-update --cache-dir "$TRIVY_ISOLATED_CACHE" ...
+trivy fs \
+  --skip-db-update \
+  --cache-dir /home/jenkins/.cache/trivy \
+  --cache-backend memory \
+  ...
 ```
 
-This keeps parallel scans from writing to the same DB/cache files at the same
-time. The persistent cache is the shared source of truth; the isolated cache is
-a temporary per-scan working copy. The copy is outside `$WORKSPACE`, so Trivy
-does not recursively scan its own DB/cache files. The copy step does not preserve
-file ownership and skips `lost+found`, which avoids non-root PVC ownership
-warnings. The `finally` block removes only the temporary isolated copy:
-
-```bash
-rm -rf "$TRIVY_ISOLATED_CACHE"
-```
-
-It does not delete the PVC-backed persistent DB.
+This keeps DB update/write behavior out of scan steps. The PVC-backed cache is
+the shared source of truth for the vulnerability DB, and each Trivy process uses
+its own in-memory scan cache. There is no temporary cache directory to clean up.
 
 Secret scanning does not use the Trivy vulnerability DB. It scans source files
 with built-in secret rules, so `runTrivySecretScan` does not create an isolated

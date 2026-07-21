@@ -15,7 +15,8 @@ import com.company.jenkins.Validation
  * - Does not require images to be pushed to a registry
  * - Does not require Docker socket access
  * - Uses the `trivy` Kubernetes container directly
- * - Uses an isolated copy of the persistent Trivy DB cache per image
+ * - Reads the persistent Trivy DB cache prepared by ensureTrivyDB
+ * - Uses Trivy's memory cache backend to avoid parallel filesystem cache locks
  * - Archives one JSON report and one human-readable table summary per image
  *
  * @param config Map containing:
@@ -26,8 +27,8 @@ import com.company.jenkins.Validation
  *   - severities: CSV severity list (default: 'HIGH,CRITICAL')
  *   - failOnVulnerabilities: Fail build when findings exist (default: true)
  *   - timeout: Trivy timeout (default: '15m')
- *   - skipDirs: Image-internal directories to skip
- *   - cacheDir: Persistent Trivy cache path (default: '/home/jenkins/.cache/trivy')
+ *   - skipDirs: Optional image-internal directories to skip
+ *   - cacheDir: Persistent Trivy DB cache path (default: '/home/jenkins/.cache/trivy')
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
  *   - failFast: Whether sibling scans stop after the first failure (default: true)
  */
@@ -36,7 +37,7 @@ def call(Map config = [:]) {
     String severities = TrivyValidation.severities((config.severities ?: 'HIGH,CRITICAL').toString(), 'Trivy image severities')
     boolean failBuild = config.get('failOnVulnerabilities', true)
     String timeout = TrivyValidation.timeout((config.timeout ?: '15m').toString(), 'Trivy image timeout')
-    List skipDirs = TrivyValidation.skipPaths(config.skipDirs ?: [], 'Trivy image skip directory')
+    List skipDirs = TrivyValidation.imageSkipPaths(config.skipDirs ?: [], 'Trivy image skip directory')
     String cacheDir = TrivyValidation.cachePath((config.cacheDir ?: '/home/jenkins/.cache/trivy').toString(), 'Trivy cache directory')
     String containerName = config.container ?: 'trivy'
     boolean failFast = config.get('failFast', true)
@@ -61,102 +62,82 @@ def call(Map config = [:]) {
                 }
 
                 writeFile file: summaryTemplateFile, text: trivySummaryTemplate()
-                String isolatedCacheDir = "/tmp/trivy-image-${UUID.randomUUID().toString()}"
 
                 withEnv([
-                    "TRIVY_SOURCE_CACHE=${cacheDir}",
-                    "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
+                    "TRIVY_CACHE_DIR=${cacheDir}",
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
                     "TRIVY_REPORT_FILE=${reportFile}",
                     "TRIVY_SUMMARY_FILE=${summaryFile}",
                     "TRIVY_SUMMARY_TEMPLATE=${summaryTemplateFile}"
                 ]) {
-                    try {
-                        int status = sh(
-                            label: "Trivy image scan: ${image.name}",
-                            returnStatus: true,
-                            script: """
-                                set -eu
-                                mkdir -p "\$TRIVY_ISOLATED_CACHE" "\$WORKSPACE/${outputDir}"
-                                rm -f "\$TRIVY_SUMMARY_FILE" "\$TRIVY_REPORT_FILE"
+                    int status = sh(
+                        label: "Trivy image scan: ${image.name}",
+                        returnStatus: true,
+                        script: """
+                            set -eu
+                            mkdir -p "\$WORKSPACE/${outputDir}"
+                            rm -f "\$TRIVY_SUMMARY_FILE" "\$TRIVY_REPORT_FILE"
 
-                                if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
-                                    for ITEM in "\$TRIVY_SOURCE_CACHE"/* "\$TRIVY_SOURCE_CACHE"/.[!.]* "\$TRIVY_SOURCE_CACHE"/..?*; do
-                                        [ -e "\$ITEM" ] || continue
-                                        [ "\$(basename "\$ITEM")" = "lost+found" ] && continue
-                                        cp -R "\$ITEM" "\$TRIVY_ISOLATED_CACHE"/
-                                    done
+                            cd "\$WORKSPACE"
+                            trivy image \\
+                                --input "\$TRIVY_IMAGE_ARCHIVE" \\
+                                --skip-db-update \\
+                                --cache-dir "\$TRIVY_CACHE_DIR" \\
+                                --cache-backend memory \\
+                                ${skipDirFlags} \\
+                                --exit-code 0 \\
+                                --severity ${Validation.shellQuote(severities)} \\
+                                --scanners vuln \\
+                                --timeout ${Validation.shellQuote(timeout)} \\
+                                --format template \\
+                                --template "@\$TRIVY_SUMMARY_TEMPLATE" \\
+                                --output "\$TRIVY_SUMMARY_FILE"
+
+                            echo "----- Trivy image scan summary: ${image.name} -----"
+                            if [ -s "\$TRIVY_SUMMARY_FILE" ]; then
+                                sed -n '1,220p' "\$TRIVY_SUMMARY_FILE"
+                                SUMMARY_LINES=\$(wc -l < "\$TRIVY_SUMMARY_FILE" | tr -d ' ')
+                                if [ "\$SUMMARY_LINES" -gt 220 ]; then
+                                    echo "... summary truncated in console; full report is archived at \$TRIVY_SUMMARY_FILE"
                                 fi
+                            else
+                                echo "Trivy summary report is empty: \$TRIVY_SUMMARY_FILE"
+                            fi
 
-                                cd "\$WORKSPACE"
-                                trivy image \\
-                                    --input "\$TRIVY_IMAGE_ARCHIVE" \\
-                                    --skip-db-update \\
-                                    --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                                    ${skipDirFlags} \\
-                                    --exit-code 0 \\
-                                    --severity ${Validation.shellQuote(severities)} \\
-                                    --scanners vuln \\
-                                    --timeout ${Validation.shellQuote(timeout)} \\
-                                    --format template \\
-                                    --template "@\$TRIVY_SUMMARY_TEMPLATE" \\
-                                    --output "\$TRIVY_SUMMARY_FILE"
+                            TRIVY_STATUS=0
+                            trivy image \\
+                                --input "\$TRIVY_IMAGE_ARCHIVE" \\
+                                --skip-db-update \\
+                                --cache-dir "\$TRIVY_CACHE_DIR" \\
+                                --cache-backend memory \\
+                                ${skipDirFlags} \\
+                                --exit-code ${exitCode} \\
+                                --severity ${Validation.shellQuote(severities)} \\
+                                --scanners vuln \\
+                                --timeout ${Validation.shellQuote(timeout)} \\
+                                --format json \\
+                                --output "\$TRIVY_REPORT_FILE" || TRIVY_STATUS=\$?
 
-                                echo "----- Trivy image scan summary: ${image.name} -----"
-                                if [ -s "\$TRIVY_SUMMARY_FILE" ]; then
-                                    sed -n '1,220p' "\$TRIVY_SUMMARY_FILE"
-                                    SUMMARY_LINES=\$(wc -l < "\$TRIVY_SUMMARY_FILE" | tr -d ' ')
-                                    if [ "\$SUMMARY_LINES" -gt 220 ]; then
-                                        echo "... summary truncated in console; full report is archived at \$TRIVY_SUMMARY_FILE"
-                                    fi
-                                else
-                                    echo "Trivy summary report is empty: \$TRIVY_SUMMARY_FILE"
-                                fi
+                            exit "\$TRIVY_STATUS"
+                        """
+                    )
 
-                                TRIVY_STATUS=0
-                                trivy image \\
-                                    --input "\$TRIVY_IMAGE_ARCHIVE" \\
-                                    --skip-db-update \\
-                                    --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                                    ${skipDirFlags} \\
-                                    --exit-code ${exitCode} \\
-                                    --severity ${Validation.shellQuote(severities)} \\
-                                    --scanners vuln \\
-                                    --timeout ${Validation.shellQuote(timeout)} \\
-                                    --format json \\
-                                    --output "\$TRIVY_REPORT_FILE" || TRIVY_STATUS=\$?
+                    if (!fileExists(summaryFile)) {
+                        error "Trivy image summary was not generated for ${image.name}: ${summaryFile}"
+                    }
 
-                                exit "\$TRIVY_STATUS"
-                            """
-                        )
+                    if (!fileExists(reportFile)) {
+                        error "Trivy image report was not generated for ${image.name}: ${reportFile}"
+                    }
 
-                        if (!fileExists(summaryFile)) {
-                            error "Trivy image summary was not generated for ${image.name}: ${summaryFile}"
-                        }
+                    archiveArtifacts(
+                        allowEmptyArchive: false,
+                        artifacts: "${summaryFile},${reportFile}",
+                        fingerprint: true
+                    )
 
-                        if (!fileExists(reportFile)) {
-                            error "Trivy image report was not generated for ${image.name}: ${reportFile}"
-                        }
-
-                        archiveArtifacts(
-                            allowEmptyArchive: false,
-                            artifacts: "${summaryFile},${reportFile}",
-                            fingerprint: true
-                        )
-
-                        if (status != 0) {
-                            error "Trivy image scan failed for ${image.name}. See ${summaryFile} and ${reportFile}"
-                        }
-                    } finally {
-                        int cleanupStatus = sh(
-                            label: "Clean Trivy image cache: ${image.name}",
-                            returnStatus: true,
-                            script: 'rm -rf "$TRIVY_ISOLATED_CACHE"'
-                        )
-
-                        if (cleanupStatus != 0) {
-                            echo "WARNING: Trivy image temporary cache cleanup failed for ${image.name}."
-                        }
+                    if (status != 0) {
+                        error "Trivy image scan failed for ${image.name}. See ${summaryFile} and ${reportFile}"
                     }
                 }
             }

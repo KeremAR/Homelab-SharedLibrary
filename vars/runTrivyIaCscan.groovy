@@ -9,6 +9,8 @@ import com.company.jenkins.Validation
  * Use this in repositories that actually contain Kubernetes manifests, Helm
  * charts, Terraform, or other infrastructure files. Application source repos
  * without manifests usually do not need this stage.
+ * It reads the persistent Trivy cache prepared before scans and keeps Trivy's
+ * runtime scan cache in memory.
  *
  * @param config Map containing:
  *   - targets: Repository-relative files/directories to scan (default: ['.'])
@@ -43,50 +45,27 @@ def call(Map config = [:]) {
                     error "Trivy IaC target does not exist: ${target}"
                 }
 
-                String isolatedCacheDir = "/tmp/trivy-iac-${UUID.randomUUID().toString()}"
-
                 withEnv([
-                    "TRIVY_SOURCE_CACHE=${cacheDir}",
-                    "TRIVY_ISOLATED_CACHE=${isolatedCacheDir}",
+                    "TRIVY_CACHE_DIR=${cacheDir}",
                     "TRIVY_TARGET=${target}"
                 ]) {
-                    try {
-                        sh(
-                            label: "Trivy IaC scan: ${target}",
-                            script: """
-                                set -eu
-                                mkdir -p "\$TRIVY_ISOLATED_CACHE"
-                                if [ -d "\$TRIVY_SOURCE_CACHE" ]; then
-                                    for ITEM in "\$TRIVY_SOURCE_CACHE"/* "\$TRIVY_SOURCE_CACHE"/.[!.]* "\$TRIVY_SOURCE_CACHE"/..?*; do
-                                        [ -e "\$ITEM" ] || continue
-                                        [ "\$(basename "\$ITEM")" = "lost+found" ] && continue
-                                        cp -R "\$ITEM" "\$TRIVY_ISOLATED_CACHE"/
-                                    done
-                                fi
-
-                                cd "\$WORKSPACE"
-                                trivy fs \\
-                                    --skip-db-update \\
-                                    --cache-dir "\$TRIVY_ISOLATED_CACHE" \\
-                                    ${skipDirFlags} \\
-                                    --exit-code ${exitCode} \\
-                                    --severity ${Validation.shellQuote(severities)} \\
-                                    --scanners misconfig \\
-                                    --timeout ${Validation.shellQuote(timeout)} \\
-                                    "\$TRIVY_TARGET"
-                            """
-                        )
-                    } finally {
-                        int cleanupStatus = sh(
-                            label: "Clean Trivy IaC cache: ${target}",
-                            returnStatus: true,
-                            script: 'rm -rf "$TRIVY_ISOLATED_CACHE"'
-                        )
-
-                        if (cleanupStatus != 0) {
-                            echo "WARNING: Trivy IaC temporary cache cleanup failed."
-                        }
-                    }
+                    sh(
+                        label: "Trivy IaC scan: ${target}",
+                        script: """
+                            set -eu
+                            cd "\$WORKSPACE"
+                            trivy fs \\
+                                --skip-db-update \\
+                                --cache-dir "\$TRIVY_CACHE_DIR" \\
+                                --cache-backend memory \\
+                                ${skipDirFlags} \\
+                                --exit-code ${exitCode} \\
+                                --severity ${Validation.shellQuote(severities)} \\
+                                --scanners misconfig \\
+                                --timeout ${Validation.shellQuote(timeout)} \\
+                                "\$TRIVY_TARGET"
+                        """
+                    )
                 }
             }
         }

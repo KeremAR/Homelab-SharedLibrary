@@ -109,4 +109,32 @@ class TrivyValidation implements Serializable {
 
         return value
     }
+
+    static List<String> imageSkipPaths(List values, String label = 'Trivy image skip path') {
+        List<String> paths = values.collect { value ->
+            imageSkipPath(value.toString(), label)
+        }
+
+        if (paths.size() != paths.unique().size()) {
+            throw new IllegalArgumentException("Duplicate ${label} values are not allowed: ${paths}")
+        }
+
+        return paths
+    }
+
+    static String imageSkipPath(String value, String label = 'Trivy image skip path') {
+        if (!value) {
+            throw new IllegalArgumentException("${label} cannot be empty")
+        }
+
+        if (value.contains('..') || value.startsWith('-')) {
+            throw new IllegalArgumentException("Invalid ${label}: ${value}")
+        }
+
+        if (!(value ==~ /^[A-Za-z0-9._*?\/-]+$/)) {
+            throw new IllegalArgumentException("Invalid characters in ${label}: ${value}")
+        }
+
+        return value
+    }
 }

@@ -18,8 +18,7 @@ import com.company.jenkins.Validation
  *   - format: SBOM format: cyclonedx, spdx, spdx-json, json (default: 'cyclonedx')
  *   - outputDir: Directory for SBOM files (default: 'sbom-reports')
  *   - timeout: Trivy timeout (default: '15m')
- *   - skipDirs: Image-internal directories to skip
- *   - cacheDir: Writable scratch cache directory root (default: '/tmp')
+ *   - skipDirs: Optional image-internal directories to skip. Avoid this for normal SBOM inventory.
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
  *   - failFast: Whether sibling SBOM jobs stop after the first failure (default: true)
  *   - uploadToDependencyTrack: Upload generated CycloneDX SBOMs (default: false)
@@ -33,8 +32,7 @@ def call(Map config = [:]) {
     String outputDir = Validation.relativePath((config.outputDir ?: 'sbom-reports').toString(), 'SBOM output directory')
     String format = sbomFormat((config.format ?: 'cyclonedx').toString())
     String timeout = TrivyValidation.timeout((config.timeout ?: '15m').toString(), 'Trivy SBOM timeout')
-    List skipDirs = TrivyValidation.skipPaths(config.skipDirs ?: [], 'Trivy SBOM skip directory')
-    String cacheRoot = TrivyValidation.cachePath((config.cacheDir ?: '/tmp').toString(), 'Trivy SBOM scratch cache root')
+    List skipDirs = TrivyValidation.imageSkipPaths(config.skipDirs ?: [], 'Trivy SBOM skip directory')
     String containerName = config.container ?: 'trivy'
     boolean failFast = config.get('failFast', true)
     boolean uploadEnabled = config.get('uploadToDependencyTrack', false)
@@ -59,50 +57,35 @@ def call(Map config = [:]) {
                     error "Docker image archive does not exist for ${image.name}: ${image.archive}"
                 }
 
-                String scratchCacheDir = "${cacheRoot}/trivy-sbom-${UUID.randomUUID().toString()}"
-
                 withEnv([
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
-                    "TRIVY_SBOM_FILE=${image.sbomFile}",
-                    "TRIVY_SCRATCH_CACHE=${scratchCacheDir}"
+                    "TRIVY_SBOM_FILE=${image.sbomFile}"
                 ]) {
-                    try {
-                        int status = sh(
-                            label: "Generate SBOM: ${image.name}",
-                            returnStatus: true,
-                            script: """
-                                set -eu
-                                mkdir -p "\$WORKSPACE/${outputDir}" "\$TRIVY_SCRATCH_CACHE"
-                                rm -f "\$TRIVY_SBOM_FILE"
+                    int status = sh(
+                        label: "Generate SBOM: ${image.name}",
+                        returnStatus: true,
+                        script: """
+                            set -eu
+                            mkdir -p "\$WORKSPACE/${outputDir}"
+                            rm -f "\$TRIVY_SBOM_FILE"
 
-                                cd "\$WORKSPACE"
-                                trivy image \\
-                                    --input "\$TRIVY_IMAGE_ARCHIVE" \\
-                                    --cache-dir "\$TRIVY_SCRATCH_CACHE" \\
-                                    ${skipDirFlags} \\
-                                    --timeout ${Validation.shellQuote(timeout)} \\
-                                    --format ${Validation.shellQuote(format)} \\
-                                    --output "\$TRIVY_SBOM_FILE"
-                            """
-                        )
+                            cd "\$WORKSPACE"
+                            trivy image \\
+                                --input "\$TRIVY_IMAGE_ARCHIVE" \\
+                                --cache-backend memory \\
+                                ${skipDirFlags} \\
+                                --timeout ${Validation.shellQuote(timeout)} \\
+                                --format ${Validation.shellQuote(format)} \\
+                                --output "\$TRIVY_SBOM_FILE"
+                        """
+                    )
 
-                        if (status != 0) {
-                            error "Trivy SBOM generation failed for ${image.name}"
-                        }
+                    if (status != 0) {
+                        error "Trivy SBOM generation failed for ${image.name}"
+                    }
 
-                        if (!fileExists(image.sbomFile)) {
-                            error "SBOM file was not generated for ${image.name}: ${image.sbomFile}"
-                        }
-                    } finally {
-                        int cleanupStatus = sh(
-                            label: "Clean Trivy SBOM scratch cache: ${image.name}",
-                            returnStatus: true,
-                            script: 'rm -rf "$TRIVY_SCRATCH_CACHE"'
-                        )
-
-                        if (cleanupStatus != 0) {
-                            echo "WARNING: Trivy SBOM scratch cache cleanup failed for ${image.name}."
-                        }
+                    if (!fileExists(image.sbomFile)) {
+                        error "SBOM file was not generated for ${image.name}: ${image.sbomFile}"
                     }
                 }
             }
