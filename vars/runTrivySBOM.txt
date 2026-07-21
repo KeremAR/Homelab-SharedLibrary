@@ -22,7 +22,8 @@ runTrivySBOM(
 <ul>
     <li>Reads <code>images.txt</code> by default.</li>
     <li>Generates one SBOM file per Docker archive.</li>
-    <li>Does not copy or require the Trivy vulnerability DB cache for SBOM generation.</li>
+    <li>Does not copy or require the persistent Trivy vulnerability DB cache for SBOM generation.</li>
+    <li>Uses a temporary writable scratch cache under <code>/tmp</code> so Trivy does not try to write to <code>/.cache</code>.</li>
     <li>Archives SBOM files and <code>sboms.txt</code> in Jenkins.</li>
     <li>Can optionally upload generated CycloneDX SBOMs to Dependency-Track.</li>
 </ul>
@@ -34,6 +35,7 @@ runTrivySBOM(
     <li><code>format</code>: SBOM format. Allowed: <code>cyclonedx</code>, <code>spdx</code>, <code>spdx-json</code>, <code>json</code>. Default: <code>cyclonedx</code>.</li>
     <li><code>outputDir</code>: SBOM directory. Default: <code>sbom-reports</code>.</li>
     <li><code>skipDirs</code>: Optional image-internal directories that Trivy should skip.</li>
+    <li><code>cacheDir</code>: Writable scratch cache root. Default: <code>/tmp</code>.</li>
     <li><code>uploadToDependencyTrack</code>: Upload generated SBOMs. Default: <code>false</code>.</li>
     <li><code>dependencyTrackUrl</code>: Dependency-Track API server URL.</li>
     <li><code>dependencyTrackCredentialsId</code>: Jenkins Secret Text credential id. Default: <code>dependency-track-api-key</code>.</li>
