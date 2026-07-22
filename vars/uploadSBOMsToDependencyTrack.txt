@@ -18,7 +18,6 @@ uploadSBOMsToDependencyTrack(
     ],
     dependencyTrackUrl: 'http://dtrack-dependency-track-api-server.dependency-track.svc.cluster.local:8080',
     credentialsId: 'dependency-track-api-key',
-    autoCreate: true,
     synchronous: false
 )
 </pre>
@@ -29,7 +28,13 @@ uploadSBOMsToDependencyTrack(
     <li><code>sboms</code>: Required list of maps with <code>file</code>, <code>projectName</code>, and <code>projectVersion</code>.</li>
     <li><code>dependencyTrackUrl</code>: API server base URL.</li>
     <li><code>credentialsId</code>: Jenkins Secret Text credential id. Default: <code>dependency-track-api-key</code>.</li>
-    <li><code>autoCreate</code>: Auto-create projects during upload. Default: <code>true</code>.</li>
     <li><code>synchronous</code>: Wait for Dependency-Track processing results. Default: <code>false</code>.</li>
     <li><code>failOnUploadError</code>: Fail the build if upload fails. Default: <code>true</code>.</li>
 </ul>
+
+<p>
+Project creation is controlled by the installed Dependency-Track Jenkins plugin
+and Dependency-Track permissions. This helper sends project name and version,
+but does not pass an <code>autoCreateProjects</code> Pipeline argument because
+some plugin versions do not expose it.
+</p>

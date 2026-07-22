@@ -217,3 +217,24 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
         capabilities:
           drop:
             - ALL
+    - name: cyclonedx
+      image: cyclonedx/cyclonedx-cli:latest
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      env:
+        - name: HOME
+          value: /tmp
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "75m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL

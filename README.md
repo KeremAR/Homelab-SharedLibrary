@@ -16,6 +16,7 @@ SonarQube, and image build stages:
 - `docker` container for Docker CLI commands
 - `docker-dind` sidecar for Docker-in-Docker image builds
 - `trivy` container for security scans
+- `cyclonedx` container for CycloneDX SBOM spec-version conversion
 - `jenkins-tools-cache-pvc` mounted at `/home/jenkins/agent/tools` for Jenkins tool installers
 - `jenkins-venv-cache-pvc` mounted at `/cache/pip` for pip downloads/wheels
 - `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
@@ -322,6 +323,21 @@ projectVersion = image tag, e.g. abc1234-v1.0-staging
 The upload helper wraps the OWASP Dependency-Track Jenkins plugin's
 `dependencyTrackPublisher` step and passes the Jenkins Secret Text credential
 named `dependency-track-api-key` with `withCredentials`.
+
+Trivy does not expose a `--spec-version` flag for CycloneDX output. The Jenkins
+pod template therefore uses one `trivy` container for SBOM generation and
+vulnerability scans, plus one `cyclonedx` container for format conversion. When
+`cycloneDxSpecVersion: 'v1_6'` is set, `runTrivySBOM()` first writes a raw
+CycloneDX JSON file with Trivy and then runs
+`cyclonedx convert --output-version v1_6`. This keeps Trivy current while
+producing a Dependency-Track compatible BOM when the installed Dependency-Track
+version rejects newer CycloneDX `specVersion: 1.7` files.
+
+Project auto-creation is not passed as a Pipeline argument. Some installed
+versions of the Dependency-Track Jenkins plugin warn that `autoCreateProjects`
+is unknown. The helper sends `projectName` and `projectVersion`; creating missing
+projects must be enabled in the plugin/global configuration or handled manually
+in Dependency-Track.
 
 ## How Python Linting Works
 

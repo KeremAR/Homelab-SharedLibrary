@@ -14,7 +14,6 @@ import com.company.jenkins.Validation
  *   - sboms: REQUIRED list of maps: [file, projectName, projectVersion]
  *   - dependencyTrackUrl: API server base URL
  *   - credentialsId: Jenkins Secret Text credential id (default: 'dependency-track-api-key')
- *   - autoCreate: Auto-create projects (default: true)
  *   - synchronous: Wait for Dependency-Track processing result (default: false)
  *   - failOnUploadError: Fail build if upload fails (default: true)
  */
@@ -26,7 +25,6 @@ def call(Map config = [:]) {
 
     String dependencyTrackUrl = apiUrl((config.dependencyTrackUrl ?: 'http://dtrack-dependency-track-api-server.dependency-track.svc.cluster.local:8080').toString())
     String credentialsId = credentialId((config.credentialsId ?: 'dependency-track-api-key').toString())
-    boolean autoCreate = config.get('autoCreate', true)
     boolean synchronous = config.get('synchronous', false)
     boolean failOnUploadError = config.get('failOnUploadError', true)
 
@@ -43,7 +41,6 @@ def call(Map config = [:]) {
                     projectVersion: sbom.projectVersion,
                     dependencyTrackUrl: dependencyTrackUrl,
                     dependencyTrackApiKey: env.DEPENDENCY_TRACK_API_KEY,
-                    autoCreateProjects: autoCreate,
                     synchronous: synchronous
                 )
             } catch (uploadError) {
