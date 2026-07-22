@@ -27,6 +27,7 @@ import com.company.jenkins.Validation
  *   - dependencyTrackProjectName: Optional fixed project name
  *   - dependencyTrackProjectVersion: Optional fixed project version
  *   - dependencyTrackAutoCreate: Auto-create projects on upload (default: true)
+ *   - dependencyTrackSynchronous: Wait for Dependency-Track processing result (default: false)
  */
 def call(Map config = [:]) {
     String outputDir = Validation.relativePath((config.outputDir ?: 'sbom-reports').toString(), 'SBOM output directory')
@@ -114,7 +115,7 @@ def call(Map config = [:]) {
             credentialsId: config.dependencyTrackCredentialsId ?: 'dependency-track-api-key',
             autoCreate: config.get('dependencyTrackAutoCreate', true),
             failOnUploadError: config.get('dependencyTrackFailOnUploadError', true),
-            container: config.dependencyTrackUploadContainer ?: 'python'
+            synchronous: config.get('dependencyTrackSynchronous', false)
         )
     }
 

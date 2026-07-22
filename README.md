@@ -319,9 +319,9 @@ projectName    = image name, e.g. user-service
 projectVersion = image tag, e.g. abc1234-v1.0-staging
 ```
 
-The upload helper uses Dependency-Track's REST API and a Jenkins Secret Text
-credential named `dependency-track-api-key`. It does not require the Jenkins
-Dependency-Track plugin.
+The upload helper wraps the OWASP Dependency-Track Jenkins plugin's
+`dependencyTrackPublisher` step and passes the Jenkins Secret Text credential
+named `dependency-track-api-key` with `withCredentials`.
 
 ## How Python Linting Works
 
