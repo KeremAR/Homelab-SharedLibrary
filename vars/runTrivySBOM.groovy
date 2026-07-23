@@ -20,8 +20,6 @@ import com.company.jenkins.Validation
  *   - timeout: Trivy timeout (default: '15m')
  *   - skipDirs: Optional image-internal directories to skip. Avoid this for normal SBOM inventory.
  *   - container: Jenkins Kubernetes container name (default: 'trivy')
- *   - cycloneDxContainer: Jenkins container for CycloneDX CLI conversion (default: 'cyclonedx')
- *   - cycloneDxSpecVersion: Optional CycloneDX output version, e.g. v1_6
  *   - failFast: Whether sibling SBOM jobs stop after the first failure (default: true)
  *   - uploadToDependencyTrack: Upload generated CycloneDX SBOMs (default: false)
  *   - dependencyTrackUrl: Dependency-Track API base URL
@@ -36,8 +34,6 @@ def call(Map config = [:]) {
     String timeout = TrivyValidation.timeout((config.timeout ?: '15m').toString(), 'Trivy SBOM timeout')
     List skipDirs = TrivyValidation.imageSkipPaths(config.skipDirs ?: [], 'Trivy SBOM skip directory')
     String containerName = config.container ?: 'trivy'
-    String cycloneDxContainer = config.cycloneDxContainer ?: 'cyclonedx'
-    String cycloneDxSpecVersion = config.cycloneDxSpecVersion ? normalizeCycloneDxSpecVersion(config.cycloneDxSpecVersion.toString()) : ''
     boolean failFast = config.get('failFast', true)
     boolean uploadEnabled = config.get('uploadToDependencyTrack', false)
     String skipDirFlags = skipDirs.collect { dir -> "--skip-dirs ${Validation.shellQuote(dir)}" }.join(' ')
@@ -45,15 +41,10 @@ def call(Map config = [:]) {
     if (uploadEnabled && format != 'cyclonedx') {
         error 'Dependency-Track upload requires CycloneDX SBOM format'
     }
-    if (cycloneDxSpecVersion && format != 'cyclonedx') {
-        error 'cycloneDxSpecVersion can only be used with CycloneDX SBOM format'
-    }
 
     List images = resolveImages(config).collect { image ->
-        String sbomFile = "${outputDir}/${safeFileBase(image.imageRef)}.${sbomExtension(format)}"
         image + [
-            sbomFile: sbomFile,
-            rawSbomFile: cycloneDxSpecVersion ? "${outputDir}/${safeFileBase(image.imageRef)}.raw.${sbomExtension(format)}" : ''
+            sbomFile: "${outputDir}/${safeFileBase(image.imageRef)}.${sbomExtension(format)}"
         ]
     }
     validateUniqueSboms(images)
@@ -68,7 +59,7 @@ def call(Map config = [:]) {
 
                 withEnv([
                     "TRIVY_IMAGE_ARCHIVE=${image.archive}",
-                    "TRIVY_SBOM_FILE=${image.rawSbomFile ?: image.sbomFile}"
+                    "TRIVY_SBOM_FILE=${image.sbomFile}"
                 ]) {
                     int status = sh(
                         label: "Generate SBOM: ${image.name}",
@@ -91,44 +82,6 @@ def call(Map config = [:]) {
 
                     if (status != 0) {
                         error "Trivy SBOM generation failed for ${image.name}"
-                    }
-
-                    if (image.rawSbomFile && !fileExists(image.rawSbomFile)) {
-                        error "Raw SBOM file was not generated for ${image.name}: ${image.rawSbomFile}"
-                    }
-
-                    if (!image.rawSbomFile && !fileExists(image.sbomFile)) {
-                        error "SBOM file was not generated for ${image.name}: ${image.sbomFile}"
-                    }
-                }
-            }
-
-            if (cycloneDxSpecVersion) {
-                container(cycloneDxContainer) {
-                    withEnv([
-                        "CYCLONEDX_RAW_SBOM_FILE=${image.rawSbomFile}",
-                        "CYCLONEDX_SBOM_FILE=${image.sbomFile}"
-                    ]) {
-                        int status = sh(
-                            label: "Convert SBOM: ${image.name}",
-                            returnStatus: true,
-                            script: """
-                                set -eu
-                                rm -f "\$CYCLONEDX_SBOM_FILE"
-
-                                cd "\$WORKSPACE"
-                                cyclonedx convert \\
-                                    --input-file "\$CYCLONEDX_RAW_SBOM_FILE" \\
-                                    --output-file "\$CYCLONEDX_SBOM_FILE" \\
-                                    --input-format json \\
-                                    --output-format json \\
-                                    --output-version ${Validation.shellQuote(cycloneDxSpecVersion)}
-                            """
-                        )
-
-                        if (status != 0) {
-                            error "CycloneDX SBOM conversion failed for ${image.name}"
-                        }
                     }
 
                     if (!fileExists(image.sbomFile)) {
@@ -234,14 +187,6 @@ private String sbomExtension(String format) {
     ]
 
     return extensions[format]
-}
-
-private String normalizeCycloneDxSpecVersion(String value) {
-    List allowed = ['v1_0', 'v1_1', 'v1_2', 'v1_3', 'v1_4', 'v1_5', 'v1_6', 'v1_7']
-    if (!allowed.contains(value)) {
-        throw new IllegalArgumentException("Invalid CycloneDX spec version: ${value}. Allowed values: ${allowed}")
-    }
-    return value
 }
 
 private String imageReference(String value, String label) {

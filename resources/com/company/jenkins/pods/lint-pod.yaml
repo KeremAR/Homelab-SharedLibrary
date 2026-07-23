@@ -195,7 +195,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
         runAsGroup: 0
         runAsNonRoot: false
     - name: trivy
-      image: aquasec/trivy:latest
+      image: aquasec/trivy:0.70.0
       imagePullPolicy: IfNotPresent
       command: ["sleep"]
       args: ["infinity"]
@@ -205,27 +205,6 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
           mountPath: /home/jenkins/agent/tools
         - name: trivy-cache
           mountPath: /home/jenkins/.cache/trivy
-      resources:
-        requests:
-          memory: "256Mi"
-          cpu: "75m"
-        limits:
-          memory: "1Gi"
-          cpu: "1000m"
-      securityContext:
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop:
-            - ALL
-    - name: cyclonedx
-      image: cyclonedx/cyclonedx-cli:latest
-      imagePullPolicy: IfNotPresent
-      command: ["sleep"]
-      args: ["infinity"]
-      tty: true
-      env:
-        - name: HOME
-          value: /tmp
       resources:
         requests:
           memory: "256Mi"

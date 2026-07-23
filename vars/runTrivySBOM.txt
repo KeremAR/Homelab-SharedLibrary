@@ -11,7 +11,6 @@ runTrivySBOM(
     imageManifest: 'image-artifacts/images.txt',
     outputDir: 'sbom-reports',
     format: 'cyclonedx',
-    cycloneDxSpecVersion: 'v1_6',
     uploadToDependencyTrack: false,
     failFast: false
 )
@@ -35,8 +34,6 @@ runTrivySBOM(
     <li><code>format</code>: SBOM format. Allowed: <code>cyclonedx</code>, <code>spdx</code>, <code>spdx-json</code>, <code>json</code>. Default: <code>cyclonedx</code>.</li>
     <li><code>outputDir</code>: SBOM directory. Default: <code>sbom-reports</code>.</li>
     <li><code>skipDirs</code>: Optional image-internal directories that Trivy should skip. Avoid this for normal SBOM inventory, because skipped dependency directories make the SBOM incomplete.</li>
-    <li><code>cycloneDxSpecVersion</code>: Optional CycloneDX output version for conversion, for example <code>v1_6</code>.</li>
-    <li><code>cycloneDxContainer</code>: Jenkins Kubernetes container that runs CycloneDX CLI conversion. Default: <code>cyclonedx</code>.</li>
     <li><code>uploadToDependencyTrack</code>: Upload generated SBOMs. Default: <code>false</code>.</li>
     <li><code>dependencyTrackUrl</code>: Dependency-Track API server URL.</li>
     <li><code>dependencyTrackCredentialsId</code>: Jenkins Secret Text credential id. Default: <code>dependency-track-api-key</code>.</li>
@@ -49,13 +46,6 @@ When <code>uploadToDependencyTrack</code> is true, <code>format</code> must be
 <code>cyclonedx</code>. If explicit <code>imageArchives</code> are used instead
 of <code>imageManifest</code>, matching <code>imageRefs</code> are required so
 Dependency-Track project versions are meaningful.
-</p>
-
-<p>
-Trivy does not expose a CycloneDX <code>--spec-version</code> flag. If
-<code>cycloneDxSpecVersion</code> is set, this helper first generates a raw
-CycloneDX JSON SBOM with Trivy and then converts it with CycloneDX CLI using
-<code>cyclonedx convert --output-version</code>.
 </p>
 
 <p>
