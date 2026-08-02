@@ -39,7 +39,8 @@ pipeline {
         stage('Resolve CI Artifact') {
             steps {
                 script {
-                    env.CI_JOB_FULL_NAME = "homelab-app-ci/${params.RELEASE_BRANCH.replace('/', '%2F')}"
+                    env.RELEASE_BRANCH_NORMALIZED = normalizeReleaseBranch(params.RELEASE_BRANCH)
+                    env.CI_JOB_FULL_NAME = "homelab-app-ci/${env.RELEASE_BRANCH_NORMALIZED.replace('/', '%2F')}"
                     def ciJob = jenkins.model.Jenkins.instance.getItemByFullName(env.CI_JOB_FULL_NAME)
                     def lastBuild = ciJob == null ? null : ciJob.getLastBuild()
 
@@ -61,7 +62,7 @@ pipeline {
                         return
                     }
 
-                    error "Latest CI build for ${params.RELEASE_BRANCH} is not SUCCESS. Enable REBUILD_IF_CI_NOT_SUCCESS to build inside this release job."
+                    error "Latest CI build for ${env.RELEASE_BRANCH_NORMALIZED} is not SUCCESS. Enable REBUILD_IF_CI_NOT_SUCCESS to build inside this release job."
                 }
             }
         }
@@ -87,7 +88,7 @@ pipeline {
             steps {
                 checkout([
                     $class: 'GitSCM',
-                    branches: [[name: "*/${params.RELEASE_BRANCH}"]],
+                    branches: [[name: "*/${env.RELEASE_BRANCH_NORMALIZED}"]],
                     userRemoteConfigs: [[
                         url: 'https://github.com/KeremAR/Homelab-App.git',
                         credentialsId: 'github-token'
@@ -103,7 +104,7 @@ pipeline {
             steps {
                 runReleaseImages(
                     images: releaseImages,
-                    branchName: params.RELEASE_BRANCH,
+                    branchName: env.RELEASE_BRANCH_NORMALIZED,
                     outputDir: 'image-artifacts',
                     platform: 'linux/amd64',
                     environment: params.DEPLOY_ENVIRONMENT,
@@ -135,4 +136,16 @@ pipeline {
             )
         }
     }
+}
+
+private String normalizeReleaseBranch(String value) {
+    String branch = (value ?: '').trim()
+    branch = branch.replaceFirst(/^refs\/heads\//, '')
+    branch = branch.replaceFirst(/^origin\//, '')
+
+    if (!branch.startsWith('release/')) {
+        throw new IllegalArgumentException("Release branch must start with release/. Got: ${value}")
+    }
+
+    return branch
 }
