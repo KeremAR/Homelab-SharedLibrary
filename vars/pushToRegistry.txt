@@ -1,0 +1,45 @@
+<h2>pushToRegistry</h2>
+
+<p>
+Loads Docker image archives produced by <code>runBuildImages</code> or
+<code>runReleaseImages</code>, retags them for a registry, and pushes them.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+pushToRegistry(
+    imageManifest: 'image-artifacts/images.txt',
+    registry: 'ghcr.io',
+    registryNamespace: 'keremar',
+    repositories: [
+        'user-service': 'todo-app-user-service'
+    ],
+    environment: 'staging',
+    credentialsId: 'github-token'
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>imageManifest</code>: Path to <code>images.txt</code>. Default: <code>image-artifacts/images.txt</code>.</li>
+    <li><code>registry</code>: Registry host. Default: <code>ghcr.io</code>.</li>
+    <li><code>registryNamespace</code>: Registry owner or namespace, for example <code>keremar</code>.</li>
+    <li><code>repositories</code>: Map from logical image name to registry repository name.</li>
+    <li><code>repositoryPrefix</code>: Optional fallback prefix when <code>repositories</code> does not contain an image name.</li>
+    <li><code>environment</code>: Optional tag suffix rewrite such as <code>staging</code> or <code>prod</code>.</li>
+    <li><code>credentialsId</code>: Jenkins username/password credentials used for <code>docker login</code>. Default: <code>github-token</code>.</li>
+    <li><code>container</code>: Jenkins Kubernetes container name. Default: <code>docker</code>.</li>
+</ul>
+
+<h3>Flow</h3>
+
+<ul>
+    <li>Reads <code>image-artifacts/images.txt</code>.</li>
+    <li>Runs <code>docker load</code> for each archived image.</li>
+    <li>Builds the target registry reference.</li>
+    <li>Runs <code>docker tag</code> when the target differs from the loaded image ref.</li>
+    <li>Runs <code>docker push</code>.</li>
+    <li>Writes <code>image-artifacts/pushed-images.txt</code>.</li>
+</ul>

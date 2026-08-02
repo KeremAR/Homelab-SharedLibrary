@@ -1,0 +1,138 @@
+@Library('homelab-shared-library') _
+
+def releaseImages = [
+    [
+        name: params.SERVICE_NAME,
+        context: params.CONTEXT_PATH,
+        dockerfile: params.DOCKERFILE_PATH
+    ]
+]
+
+def registryRepositories = [
+    (params.SERVICE_NAME): params.REGISTRY_REPOSITORY
+]
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml ciLintPodTemplate(
+                images: releaseImages,
+                dockerCachePvc: params.DOCKER_CACHE_PVC
+            )
+            defaultContainer 'jnlp'
+        }
+    }
+
+    options {
+        buildDiscarder(logRotator(
+            numToKeepStr: '10',
+            artifactNumToKeepStr: '1',
+            artifactDaysToKeepStr: '1'
+        ))
+        skipDefaultCheckout(true)
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Resolve CI Artifact') {
+            steps {
+                script {
+                    env.CI_JOB_FULL_NAME = "homelab-app-ci/${params.RELEASE_BRANCH.replace('/', '%2F')}"
+                    def ciJob = jenkins.model.Jenkins.instance.getItemByFullName(env.CI_JOB_FULL_NAME)
+                    def lastBuild = ciJob == null ? null : ciJob.getLastBuild()
+
+                    env.CI_LAST_BUILD_NUMBER = lastBuild == null ? '' : lastBuild.getNumber().toString()
+                    env.CI_LAST_BUILD_RESULT = lastBuild == null || lastBuild.getResult() == null ? 'NONE' : lastBuild.getResult().toString()
+
+                    echo "Release branch CI job: ${env.CI_JOB_FULL_NAME}"
+                    echo "Latest CI build: #${env.CI_LAST_BUILD_NUMBER ?: 'none'} result=${env.CI_LAST_BUILD_RESULT}"
+
+                    if (env.CI_LAST_BUILD_RESULT == 'SUCCESS') {
+                        env.USE_CI_ARTIFACTS = 'true'
+                        echo 'Using image artifacts from the latest successful CI run.'
+                        return
+                    }
+
+                    if (params.REBUILD_IF_CI_NOT_SUCCESS) {
+                        env.USE_CI_ARTIFACTS = 'false'
+                        echo 'Latest CI build is not SUCCESS, but rebuild fallback is enabled.'
+                        return
+                    }
+
+                    error "Latest CI build for ${params.RELEASE_BRANCH} is not SUCCESS. Enable REBUILD_IF_CI_NOT_SUCCESS to build inside this release job."
+                }
+            }
+        }
+
+        stage('Copy CI Image Artifact') {
+            when {
+                expression { env.USE_CI_ARTIFACTS == 'true' }
+            }
+            steps {
+                copyArtifacts(
+                    projectName: env.CI_JOB_FULL_NAME,
+                    selector: specific(env.CI_LAST_BUILD_NUMBER),
+                    filter: 'image-artifacts/**',
+                    fingerprintArtifacts: true
+                )
+            }
+        }
+
+        stage('Checkout Release Branch') {
+            when {
+                expression { env.USE_CI_ARTIFACTS != 'true' }
+            }
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${params.RELEASE_BRANCH}"]],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/KeremAR/Homelab-App.git',
+                        credentialsId: 'github-token'
+                    ]]
+                ])
+            }
+        }
+
+        stage('Build Image Fallback') {
+            when {
+                expression { env.USE_CI_ARTIFACTS != 'true' }
+            }
+            steps {
+                runReleaseImages(
+                    images: releaseImages,
+                    branchName: params.RELEASE_BRANCH,
+                    outputDir: 'image-artifacts',
+                    platform: 'linux/amd64',
+                    environment: params.DEPLOY_ENVIRONMENT,
+                    failFast: false
+                )
+            }
+        }
+
+        stage('Push to Registry') {
+            steps {
+                pushToRegistry(
+                    imageManifest: 'image-artifacts/images.txt',
+                    registry: 'ghcr.io',
+                    registryNamespace: 'keremar',
+                    repositories: registryRepositories,
+                    environment: params.DEPLOY_ENVIRONMENT,
+                    credentialsId: 'github-token'
+                )
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true,
+                notFailBuild: true
+            )
+        }
+    }
+}
