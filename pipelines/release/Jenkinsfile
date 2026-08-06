@@ -1,23 +1,11 @@
 @Library('homelab-shared-library') _
 
-def releaseImages = [
-    [
-        name: params.SERVICE_NAME,
-        context: params.CONTEXT_PATH,
-        dockerfile: params.DOCKERFILE_PATH
-    ]
-]
-
-def registryRepositories = [
-    (params.SERVICE_NAME): params.REGISTRY_REPOSITORY
-]
-
 pipeline {
     agent {
         kubernetes {
             yaml ciLintPodTemplate(
-                images: releaseImages,
-                dockerCachePvc: params.DOCKER_CACHE_PVC
+                images: releaseImages(),
+                dockerCachePvc: releaseServiceConfig().dockerCachePvc
             )
             defaultContainer 'jnlp'
         }
@@ -39,30 +27,25 @@ pipeline {
         stage('Resolve CI Artifact') {
             steps {
                 script {
-                    env.RELEASE_BRANCH_NORMALIZED = normalizeReleaseBranch(params.RELEASE_BRANCH)
-                    env.CI_JOB_FULL_NAME = "homelab-app-ci/${env.RELEASE_BRANCH_NORMALIZED.replace('/', '%2F')}"
-                    def ciJob = jenkins.model.Jenkins.instance.getItemByFullName(env.CI_JOB_FULL_NAME)
-                    def lastBuild = ciJob == null ? null : ciJob.getLastBuild()
+                    Map service = releaseServiceConfig()
 
-                    env.CI_LAST_BUILD_NUMBER = lastBuild == null ? '' : lastBuild.getNumber().toString()
-                    env.CI_LAST_BUILD_RESULT = lastBuild == null || lastBuild.getResult() == null ? 'NONE' : lastBuild.getResult().toString()
+                    env.SELECTED_BRANCH_NORMALIZED = normalizeBranchName(params.RELEASE_BRANCH)
+                    env.IS_RELEASE_BRANCH = isReleaseBranch(env.SELECTED_BRANCH_NORMALIZED).toString()
+                    env.CI_JOB_FULL_NAME = "homelab-app-ci/${jenkinsBranchJobName(env.SELECTED_BRANCH_NORMALIZED)}"
 
-                    echo "Release branch CI job: ${env.CI_JOB_FULL_NAME}"
-                    echo "Latest CI build: #${env.CI_LAST_BUILD_NUMBER ?: 'none'} result=${env.CI_LAST_BUILD_RESULT}"
+                    echo "Release job service: ${service.name}"
+                    echo "Selected branch: ${env.SELECTED_BRANCH_NORMALIZED}"
+                    echo "Release branch mode: ${env.IS_RELEASE_BRANCH}"
+                    echo "Selected branch CI job: ${env.CI_JOB_FULL_NAME}"
 
-                    if (env.CI_LAST_BUILD_RESULT == 'SUCCESS') {
+                    if (params.USE_LAST_SUCCESSFUL_CI_ARTIFACT) {
                         env.USE_CI_ARTIFACTS = 'true'
-                        echo 'Using image artifacts from the latest successful CI run.'
+                        echo "Will try image artifacts from latest successful CI build of ${env.CI_JOB_FULL_NAME}."
                         return
                     }
 
-                    if (params.REBUILD_IF_CI_NOT_SUCCESS) {
-                        env.USE_CI_ARTIFACTS = 'false'
-                        echo 'Latest CI build is not SUCCESS, but rebuild fallback is enabled.'
-                        return
-                    }
-
-                    error "Latest CI build for ${env.RELEASE_BRANCH_NORMALIZED} is not SUCCESS. Enable REBUILD_IF_CI_NOT_SUCCESS to build inside this release job."
+                    env.USE_CI_ARTIFACTS = 'false'
+                    echo 'CI artifact reuse is disabled; this release job will build the image.'
                 }
             }
         }
@@ -74,21 +57,21 @@ pipeline {
             steps {
                 copyArtifacts(
                     projectName: env.CI_JOB_FULL_NAME,
-                    selector: specific(env.CI_LAST_BUILD_NUMBER),
+                    selector: lastSuccessful(),
                     filter: 'image-artifacts/**',
                     fingerprintArtifacts: true
                 )
             }
         }
 
-        stage('Checkout Release Branch') {
+        stage('Checkout Selected Branch') {
             when {
                 expression { env.USE_CI_ARTIFACTS != 'true' }
             }
             steps {
                 checkout([
                     $class: 'GitSCM',
-                    branches: [[name: "*/${env.RELEASE_BRANCH_NORMALIZED}"]],
+                    branches: [[name: "*/${env.SELECTED_BRANCH_NORMALIZED}"]],
                     userRemoteConfigs: [[
                         url: 'https://github.com/KeremAR/Homelab-App.git',
                         credentialsId: 'github-token'
@@ -103,8 +86,8 @@ pipeline {
             }
             steps {
                 runReleaseImages(
-                    images: releaseImages,
-                    branchName: env.RELEASE_BRANCH_NORMALIZED,
+                    images: releaseImages(),
+                    branchName: env.SELECTED_BRANCH_NORMALIZED,
                     outputDir: 'image-artifacts',
                     platform: 'linux/amd64',
                     environment: params.DEPLOY_ENVIRONMENT,
@@ -119,8 +102,9 @@ pipeline {
                     imageManifest: 'image-artifacts/images.txt',
                     registry: 'ghcr.io',
                     registryNamespace: 'keremar',
-                    repositories: registryRepositories,
+                    repositories: registryRepositories(),
                     environment: params.DEPLOY_ENVIRONMENT,
+                    branchName: env.SELECTED_BRANCH_NORMALIZED,
                     credentialsId: 'github-token'
                 )
             }
@@ -138,14 +122,74 @@ pipeline {
     }
 }
 
-private String normalizeReleaseBranch(String value) {
+private List releaseImages() {
+    Map service = releaseServiceConfig()
+    return [[
+        name: service.name,
+        context: service.context,
+        dockerfile: service.dockerfile
+    ]]
+}
+
+private Map registryRepositories() {
+    Map service = releaseServiceConfig()
+    return [(service.name): service.registryRepository]
+}
+
+private Map releaseServiceConfig() {
+    Map servicesByJob = [
+        'release-user-service': [
+            name: 'user-service',
+            context: 'user-service',
+            dockerfile: 'user-service/Dockerfile',
+            dockerCachePvc: 'jenkins-docker-cache-user-service-pvc',
+            registryRepository: 'todo-app-user-service'
+        ],
+        'release-todo-service': [
+            name: 'todo-service',
+            context: 'todo-service',
+            dockerfile: 'todo-service/Dockerfile',
+            dockerCachePvc: 'jenkins-docker-cache-todo-service-pvc',
+            registryRepository: 'todo-app-todo-service'
+        ],
+        'release-frontend': [
+            name: 'frontend',
+            context: 'frontend',
+            dockerfile: 'frontend/Dockerfile',
+            dockerCachePvc: 'jenkins-docker-cache-frontend-pvc',
+            registryRepository: 'todo-app-frontend'
+        ]
+    ]
+
+    String jobName = env.JOB_BASE_NAME ?: (env.JOB_NAME ?: '').tokenize('/').last()
+    Map service = servicesByJob[jobName]
+    if (!service) {
+        throw new IllegalArgumentException("Unknown release job: ${jobName}. Known jobs: ${servicesByJob.keySet()}")
+    }
+
+    return service
+}
+
+private String normalizeBranchName(String value) {
     String branch = (value ?: '').trim()
     branch = branch.replaceFirst(/^refs\/heads\//, '')
     branch = branch.replaceFirst(/^origin\//, '')
 
-    if (!branch.startsWith('release/')) {
-        throw new IllegalArgumentException("Release branch must start with release/. Got: ${value}")
+    if (!branch) {
+        throw new IllegalArgumentException('RELEASE_BRANCH cannot be empty')
+    }
+
+    if (branch.startsWith('-') || branch.contains('..')) {
+        throw new IllegalArgumentException("Invalid branch name: ${value}")
     }
 
     return branch
+}
+
+private boolean isReleaseBranch(String branch) {
+    return branch == 'release' || branch.startsWith('release/')
+}
+
+private String jenkinsBranchJobName(String branch) {
+    return branch.replace('/', '%2F')
 }

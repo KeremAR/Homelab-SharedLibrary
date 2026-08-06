@@ -17,6 +17,7 @@ import com.company.jenkins.Validation
  * - Loads Docker archives with docker load
  * - Keeps source image refs local unless they already match the target
  * - Rewrites the tag environment suffix when config.environment is set
+ * - Applies environment suffixes only for release/* branches when config.branchName is set
  * - Archives pushed-images.txt for traceability
  *
  * SECURITY:
@@ -31,6 +32,7 @@ import com.company.jenkins.Validation
  *   - repositories: Optional map from logical image name to registry repository name/path
  *   - repositoryPrefix: Optional prefix when repositories does not contain the image name
  *   - environment: Optional tag suffix rewrite, for example 'staging' or 'prod'
+ *   - branchName: Optional source branch. When set, environment is used only for release/* branches
  *   - credentialsId: Jenkins username/password credentials id (default: 'github-token')
  *   - container: Jenkins Kubernetes container name (default: 'docker')
  *
@@ -61,7 +63,8 @@ def call(Map config = [:]) {
     String namespace = config.registryNamespace ? repositoryPath(config.registryNamespace.toString(), 'Registry namespace') : ''
     String repositoryPrefix = config.repositoryPrefix ? repositoryName(config.repositoryPrefix.toString(), 'Repository prefix') : ''
     Map repositories = normalizeRepositories(config.repositories ?: [:])
-    String environmentName = config.environment ? tagSegment(config.environment.toString(), 'Registry tag environment') : ''
+    String branchName = config.branchName ? normalizeBranchName(config.branchName.toString()) : ''
+    String environmentName = resolveEnvironmentName(config.environment, branchName)
     String credentialsId = (config.credentialsId ?: 'github-token').toString()
     String containerName = config.container ?: 'docker'
     String dockerHost = 'tcp://localhost:2375'
@@ -208,6 +211,39 @@ private String rewriteEnvironmentTag(String sourceTag, String environmentName) {
     }
 
     return "${sourceTag}-${environmentName}"
+}
+
+private String resolveEnvironmentName(Object environment, String branchName) {
+    if (!environment) {
+        return ''
+    }
+
+    String environmentName = tagSegment(environment.toString(), 'Registry tag environment')
+    if (branchName && !isReleaseBranch(branchName)) {
+        return ''
+    }
+
+    return environmentName
+}
+
+private String normalizeBranchName(String value) {
+    String branch = (value ?: '').trim()
+    branch = branch.replaceFirst(/^refs\/heads\//, '')
+    branch = branch.replaceFirst(/^origin\//, '')
+
+    if (!branch) {
+        throw new IllegalArgumentException('Branch name cannot be empty')
+    }
+
+    if (branch.startsWith('-') || branch.contains('..')) {
+        throw new IllegalArgumentException("Invalid branch name: ${value}")
+    }
+
+    return branch
+}
+
+private boolean isReleaseBranch(String branch) {
+    return branch == 'release' || branch.startsWith('release/')
 }
 
 private String registryHost(String value, String label) {

@@ -13,6 +13,8 @@ import com.company.jenkins.ReleaseResolver
  * - For single-image repositories, also accepts release/v<version>
  * - Builds only the image named by the release branch
  * - Tags the image as <commit>-v<version>-<environment>
+ * - For non-release branches, builds the configured single image and tags it
+ *   as <commit>-<normalized-branch>
  *
  * @param config Map containing:
  *   - images: REQUIRED - List of image maps passed to runBuildImages
@@ -44,21 +46,29 @@ def call(Map config = [:]) {
     String releasePrefix = (config.releasePrefix ?: 'release/').toString()
     String environmentName = tagSegment((config.environment ?: 'staging').toString(), 'release environment')
 
+    boolean releaseBranch = branchName.startsWith(releasePrefix)
     Map releaseInfo = ReleaseResolver.resolve(
         images: rawImages,
         branchName: branchName,
         releasePrefix: releasePrefix,
-        required: true
+        required: releaseBranch
     )
-    String shortCommit = resolveShortCommit(config)
-    String imageTag = "${shortCommit}-${releaseInfo.version}-${environmentName}"
+    String imageTag = releaseInfo.releaseBranch
+        ? "${resolveShortCommit(config)}-${releaseInfo.version}-${environmentName}"
+        : "${resolveShortCommit(config)}-${branchTag(branchName)}"
 
-    List images = rawImages
-        .findAll { image -> image.name?.toString() == releaseInfo.service }
-        .collect { image -> image + [tag: imageTag] }
+    List images = releaseInfo.releaseBranch
+        ? rawImages.findAll { image -> image.name?.toString() == releaseInfo.service }
+        : nonReleaseImages(rawImages)
+    images = images.collect { image -> image + [tag: imageTag] }
 
-    echo "Release branch parsed: service=${releaseInfo.service}, version=${releaseInfo.version}, environment=${environmentName}"
-    echo "Building release image: ${releaseInfo.service}:${imageTag}"
+    if (releaseInfo.releaseBranch) {
+        echo "Release branch parsed: service=${releaseInfo.service}, version=${releaseInfo.version}, environment=${environmentName}"
+        echo "Building release image: ${releaseInfo.service}:${imageTag}"
+    } else {
+        echo "Non-release branch selected; using branch tag: ${imageTag}"
+        echo "Building image: ${images[0].name}:${imageTag}"
+    }
 
     return runBuildImages(
         images: images,
@@ -68,6 +78,28 @@ def call(Map config = [:]) {
         archiveArtifacts: config.get('archiveArtifacts', true),
         failFast: config.get('failFast', true)
     )
+}
+
+private List nonReleaseImages(List rawImages) {
+    if (rawImages.size() != 1) {
+        throw new IllegalArgumentException(
+            "Non-release branch builds require exactly one image. Got: ${rawImages.collect { it.name }}"
+        )
+    }
+
+    return rawImages
+}
+
+private String branchTag(String branchName) {
+    String tag = branchName
+        .replaceFirst(/^refs\/heads\//, '')
+        .replaceFirst(/^origin\//, '')
+        .replaceAll(/[^A-Za-z0-9_.-]/, '-')
+        .replaceAll(/-+/, '-')
+        .replaceAll(/^-+/, '')
+        .replaceAll(/-+$/, '')
+
+    return tagSegment(tag, 'branch image tag')
 }
 
 private String resolveShortCommit(Map config) {

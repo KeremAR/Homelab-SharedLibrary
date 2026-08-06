@@ -1,7 +1,8 @@
 <h2>runReleaseImages</h2>
 
-Builds the image selected by a release branch and delegates the actual Docker
-build/archive work to <code>runBuildImages</code>.
+Builds the image selected by a release branch or a configured single image for
+non-release branch builds. It delegates the actual Docker build/archive work to
+<code>runBuildImages</code>.
 
 <h3>Branch Format</h3>
 
@@ -14,6 +15,9 @@ For a single-image repository, this is also supported:
 <pre>
 release/v&lt;version&gt;
 </pre>
+
+Non-release branches are also accepted when exactly one image is configured.
+Their branch name is normalized into a Docker-safe tag segment.
 
 <h3>Example</h3>
 
@@ -31,9 +35,11 @@ runReleaseImages(
 
 <ul>
     <li>Reads the branch name from <code>env.BRANCH_NAME</code> by default.</li>
-    <li>Finds the image whose <code>name</code> matches the service in the branch name.</li>
-    <li>Builds only that image.</li>
-    <li>Creates tags like <code>&lt;commit&gt;-v1.0-staging</code>.</li>
+    <li>For release branches, finds the image whose <code>name</code> matches the service in the branch name.</li>
+    <li>For non-release branches, requires exactly one configured image.</li>
+    <li>Builds only the selected image.</li>
+    <li>Creates release tags like <code>&lt;commit&gt;-v1.0-staging</code>.</li>
+    <li>Creates non-release tags like <code>&lt;commit&gt;-feature-ci-linting</code>.</li>
     <li>Calls <code>runBuildImages</code> with the selected image.</li>
 </ul>
 
