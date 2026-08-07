@@ -167,7 +167,7 @@ private Map releaseServiceConfig() {
     String jobName = env.JOB_BASE_NAME ?: (env.JOB_NAME ?: '').tokenize('/').last()
     Map service = servicesByJob[jobName]
     if (!service) {
-        throw new IllegalArgumentException("Unknown release job: ${jobName}. Known jobs: ${servicesByJob.keySet()}")
+        error "Unknown release job: ${jobName}. Known jobs: ${servicesByJob.keySet()}"
     }
 
     return service
@@ -179,11 +179,11 @@ private String normalizeBranchName(String value) {
     branch = branch.replaceFirst(/^origin\//, '')
 
     if (!branch) {
-        throw new IllegalArgumentException('RELEASE_BRANCH cannot be empty')
+        error 'RELEASE_BRANCH cannot be empty'
     }
 
     if (branch.startsWith('-') || branch.contains('..')) {
-        throw new IllegalArgumentException("Invalid branch name: ${value}")
+        error "Invalid branch name: ${value}"
     }
 
     return branch
@@ -199,14 +199,12 @@ private void validateBranchForService(String branch, Map service) {
         return
     }
 
-    throw new IllegalArgumentException(
-        "Invalid release branch for ${service.name}. Expected ${expectedPrefix}<version>, got: ${branch}"
-    )
+    error "Invalid release branch for ${service.name}. Expected ${expectedPrefix}<version>, got: ${branch}"
 }
 
 private void validateReleaseMode(String deployEnvironment, boolean useCiArtifact) {
     if (deployEnvironment == 'prod' && !useCiArtifact) {
-        throw new IllegalArgumentException('Production releases require a successful CI image artifact; fallback rebuild is allowed only for non-prod releases')
+        error 'Production releases require a successful CI image artifact; fallback rebuild is allowed only for non-prod releases'
     }
 }
 
