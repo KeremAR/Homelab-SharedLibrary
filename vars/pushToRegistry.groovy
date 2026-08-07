@@ -72,7 +72,7 @@ def call(Map config = [:]) {
     List images = ImageArtifactManifest.parse(readFile(manifest), manifest).collect { image ->
         String sourceTag = ImageArtifactManifest.tagFromImageRef(image.imageRef)
         String targetTag = environmentName ? rewriteEnvironmentTag(sourceTag, environmentName) : sourceTag
-        String repository = repositories[image.name] ?: "${repositoryPrefix}${image.name}"
+        String repository = resolveRepository(image.name, repositories, repositoryPrefix)
         String repositoryWithNamespace = namespace ? "${namespace}/${repository}" : repository
         String targetRef = imageReference("${registry}/${repositoryWithNamespace}:${targetTag}", "Target image reference for ${image.name}")
 
@@ -85,78 +85,86 @@ def call(Map config = [:]) {
 
     validateUniqueTargets(images)
 
-    container(containerName) {
-        withCredentials([
-            usernamePassword(
-                credentialsId: credentialsId,
-                usernameVariable: 'REGISTRY_USERNAME',
-                passwordVariable: 'REGISTRY_PASSWORD'
-            )
-        ]) {
-            withEnv([
-                "DOCKER_HOST=${dockerHost}",
-                "DOCKER_TLS_CERTDIR=",
-                "REGISTRY_HOST=${registry}"
-            ]) {
-                sh(
-                    label: "Docker login: ${registry}",
-                    script: '''
-                        set -eu
-
-                        export HOME="$WORKSPACE"
-                        export DOCKER_CONFIG="$WORKSPACE/.docker"
-                        mkdir -p "$DOCKER_CONFIG"
-
-                        for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-                            if docker info >/dev/null 2>&1; then
-                                break
-                            fi
-
-                            if [ "$attempt" = "12" ]; then
-                                echo "Docker daemon is not ready at $DOCKER_HOST" >&2
-                                docker version || true
-                                exit 1
-                            fi
-
-                            sleep 5
-                        done
-
-                        echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" \
-                            -u "$REGISTRY_USERNAME" \
-                            --password-stdin
-                    '''
+    try {
+        container(containerName) {
+            withCredentials([
+                usernamePassword(
+                    credentialsId: credentialsId,
+                    usernameVariable: 'REGISTRY_USERNAME',
+                    passwordVariable: 'REGISTRY_PASSWORD'
                 )
+            ]) {
+                withEnv([
+                    "DOCKER_HOST=${dockerHost}",
+                    "DOCKER_TLS_CERTDIR=",
+                    "REGISTRY_HOST=${registry}"
+                ]) {
+                    sh(
+                        label: "Docker login: ${registry}",
+                        script: '''
+                            set -eu
 
-                images.each { image ->
-                    if (!fileExists(image.archive)) {
-                        error "Docker image archive does not exist for ${image.name}: ${image.archive}"
-                    }
+                            export HOME="$WORKSPACE"
+                            export DOCKER_CONFIG="$WORKSPACE/.docker"
+                            mkdir -p "$DOCKER_CONFIG"
 
-                    withEnv([
-                        "SOURCE_IMAGE_REF=${image.imageRef}",
-                        "TARGET_IMAGE_REF=${image.targetRef}",
-                        "IMAGE_ARCHIVE=${image.archive}"
-                    ]) {
-                        sh(
-                            label: "Push image: ${image.name}",
-                            script: '''
-                                set -eu
-
-                                export HOME="$WORKSPACE"
-                                export DOCKER_CONFIG="$WORKSPACE/.docker"
-
-                                docker load -i "$WORKSPACE/$IMAGE_ARCHIVE"
-
-                                if [ "$SOURCE_IMAGE_REF" != "$TARGET_IMAGE_REF" ]; then
-                                    docker tag "$SOURCE_IMAGE_REF" "$TARGET_IMAGE_REF"
+                            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                                if docker info >/dev/null 2>&1; then
+                                    break
                                 fi
 
-                                docker push "$TARGET_IMAGE_REF"
-                            '''
-                        )
+                                if [ "$attempt" = "12" ]; then
+                                    echo "Docker daemon is not ready at $DOCKER_HOST" >&2
+                                    docker version || true
+                                    exit 1
+                                fi
+
+                                sleep 5
+                            done
+
+                            echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" \
+                                -u "$REGISTRY_USERNAME" \
+                                --password-stdin
+                        '''
+                    )
+
+                    images.each { image ->
+                        if (!fileExists(image.archive)) {
+                            error "Docker image archive does not exist for ${image.name}: ${image.archive}"
+                        }
+
+                        withEnv([
+                            "SOURCE_IMAGE_REF=${image.imageRef}",
+                            "TARGET_IMAGE_REF=${image.targetRef}",
+                            "IMAGE_ARCHIVE=${image.archive}"
+                        ]) {
+                            sh(
+                                label: "Push image: ${image.name}",
+                                script: '''
+                                    set -eu
+
+                                    export HOME="$WORKSPACE"
+                                    export DOCKER_CONFIG="$WORKSPACE/.docker"
+
+                                    docker load -i "$WORKSPACE/$IMAGE_ARCHIVE"
+
+                                    if [ "$SOURCE_IMAGE_REF" != "$TARGET_IMAGE_REF" ]; then
+                                        docker tag "$SOURCE_IMAGE_REF" "$TARGET_IMAGE_REF"
+                                    fi
+
+                                    docker push "$TARGET_IMAGE_REF"
+                                '''
+                            )
+                        }
                     }
                 }
             }
+        }
+    } finally {
+        try {
+            cleanupDockerAuth(containerName, dockerHost, registry)
+        } catch (cleanupError) {
+            echo "Docker auth cleanup failed: ${cleanupError.message}"
         }
     }
 
@@ -178,6 +186,42 @@ private Map normalizeRepositories(Map repositories) {
         normalized[name] = repositoryPath(value.toString(), "Repository path for ${name}")
     }
     return normalized
+}
+
+private String resolveRepository(String imageName, Map repositories, String repositoryPrefix) {
+    if (!repositories.isEmpty()) {
+        if (!repositories.containsKey(imageName)) {
+            throw new IllegalArgumentException(
+                "No registry repository mapping exists for image '${imageName}'. Allowed images: ${repositories.keySet()}"
+            )
+        }
+
+        return repositories[imageName]
+    }
+
+    return "${repositoryPrefix}${imageName}"
+}
+
+private void cleanupDockerAuth(String containerName, String dockerHost, String registry) {
+    container(containerName) {
+        withEnv([
+            "DOCKER_HOST=${dockerHost}",
+            "DOCKER_TLS_CERTDIR=",
+            "REGISTRY_HOST=${registry}"
+        ]) {
+            sh(
+                label: "Docker logout: ${registry}",
+                returnStatus: true,
+                script: '''
+                    export HOME="$WORKSPACE"
+                    export DOCKER_CONFIG="$WORKSPACE/.docker"
+
+                    docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true
+                    rm -rf "$DOCKER_CONFIG"
+                '''
+            )
+        }
+    }
 }
 
 private void validateUniqueTargets(List images) {

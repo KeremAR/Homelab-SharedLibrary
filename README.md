@@ -289,6 +289,17 @@ Because both paths produce the same `image-artifacts/` layout, the push step
 does not care whether the image came from CI artifacts or was rebuilt inside the
 release job.
 
+Release jobs validate that the selected branch belongs to the service handled by
+the job. For example, `release-user-service` accepts
+`release/user-service-v<version>` and rejects `release/todo-service-v<version>`.
+The Jenkins UI also filters branches per service, but the Jenkinsfile validation
+is the real guardrail because UI filters should not be trusted as the only
+protection.
+
+Production releases require `USE_LAST_SUCCESSFUL_CI_ARTIFACT=true`. Fallback
+builds are allowed for staging, but production should promote an artifact that
+already passed the CI branch pipeline.
+
 The helper then runs:
 
 ```text
@@ -326,6 +337,11 @@ without appending `staging` or `prod`. This lets the same helper work for future
 non-release push flows without putting release policy logic in every
 Jenkinsfile.
 
+When a `repositories` map is supplied, every image in `images.txt` must have an
+explicit mapping. The helper does not fall back to pushing `image.name` as the
+registry repository in that case. This prevents a wrong copied artifact from
+being pushed by the wrong release job.
+
 `pushToRegistry()` writes and archives:
 
 ```text
@@ -334,6 +350,18 @@ image-artifacts/pushed-images.txt
 
 That file records the source image ref, final registry ref, and archive path
 that were pushed.
+
+`pushToRegistry()` logs in with Jenkins credentials, pushes the image, then logs
+out and removes `$WORKSPACE/.docker` in a `finally` block. The release
+Jenkinsfile also runs `cleanWs(...)`, but the helper still cleans up its own
+registry auth files so it is safer when reused elsewhere.
+
+The current release job uses Copy Artifact's `lastSuccessful()` selector. That
+means it copies the latest successful CI build for the selected branch, not
+necessarily the newest commit if the newest CI run failed. Image tags include
+the commit hash, so the pushed tag still shows exactly which commit was
+promoted. A stricter future version can add an explicit `CI_BUILD_NUMBER`
+parameter and use `specific(...)` instead.
 
 ## Image Security Scan And SBOM
 

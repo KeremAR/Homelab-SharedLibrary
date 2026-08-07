@@ -33,6 +33,9 @@ pipeline {
                     env.IS_RELEASE_BRANCH = isReleaseBranch(env.SELECTED_BRANCH_NORMALIZED).toString()
                     env.CI_JOB_FULL_NAME = "homelab-app-ci/${jenkinsBranchJobName(env.SELECTED_BRANCH_NORMALIZED)}"
 
+                    validateBranchForService(env.SELECTED_BRANCH_NORMALIZED, service)
+                    validateReleaseMode(params.DEPLOY_ENVIRONMENT, params.USE_LAST_SUCCESSFUL_CI_ARTIFACT)
+
                     echo "Release job service: ${service.name}"
                     echo "Selected branch: ${env.SELECTED_BRANCH_NORMALIZED}"
                     echo "Release branch mode: ${env.IS_RELEASE_BRANCH}"
@@ -188,6 +191,23 @@ private String normalizeBranchName(String value) {
 
 private boolean isReleaseBranch(String branch) {
     return branch == 'release' || branch.startsWith('release/')
+}
+
+private void validateBranchForService(String branch, Map service) {
+    String expectedPrefix = "release/${service.name}-v"
+    if (branch.startsWith(expectedPrefix)) {
+        return
+    }
+
+    throw new IllegalArgumentException(
+        "Invalid release branch for ${service.name}. Expected ${expectedPrefix}<version>, got: ${branch}"
+    )
+}
+
+private void validateReleaseMode(String deployEnvironment, boolean useCiArtifact) {
+    if (deployEnvironment == 'prod' && !useCiArtifact) {
+        throw new IllegalArgumentException('Production releases require a successful CI image artifact; fallback rebuild is allowed only for non-prod releases')
+    }
 }
 
 private String jenkinsBranchJobName(String branch) {
