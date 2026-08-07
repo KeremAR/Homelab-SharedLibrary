@@ -105,6 +105,7 @@ scanner analyzer files reused by later builds.
 - `uploadSBOMsToDependencyTrack(sboms: [...])` uploads SBOMs to Dependency-Track.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
+- `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
 
 ## Lint Helpers
 
@@ -250,6 +251,89 @@ That timing is why a Jenkins `lock { ... }` inside the build stage is not enough
 to protect a shared `/var/lib/docker` PVC. By the time the stage starts, the pod
 has already mounted the volume and the Docker daemon may already be running.
 `ReadWriteOncePod` moves the protection to Kubernetes volume attachment time.
+
+## Registry Push Flow
+
+`pushToRegistry()` is used by manual release/deploy pipelines after image
+artifacts already exist. It does not build images. It reads the manifest written
+by `runBuildImages()` or copied from a previous CI build:
+
+```text
+image-artifacts/images.txt
+```
+
+Each row tells the helper:
+
+```text
+image name
+local image reference
+Docker archive path
+platform
+```
+
+The release pipeline can get these files in two ways:
+
+```text
+Use latest successful CI artifact
+  -> copyArtifacts(projectName: 'homelab-app-ci/<branch>', selector: lastSuccessful())
+  -> image-artifacts/images.txt appears in the release job workspace
+  -> image-artifacts/<image>.docker.tar appears in the release job workspace
+
+Build fallback
+  -> runReleaseImages(...)
+  -> runBuildImages(...)
+  -> the same image-artifacts/images.txt and Docker tar files are created locally
+```
+
+Because both paths produce the same `image-artifacts/` layout, the push step
+does not care whether the image came from CI artifacts or was rebuilt inside the
+release job.
+
+The helper then runs:
+
+```text
+docker load -i image-artifacts/<image>.docker.tar
+docker tag <local-ref> <registry-ref>
+docker push <registry-ref>
+```
+
+Example:
+
+```groovy
+pushToRegistry(
+  imageManifest: 'image-artifacts/images.txt',
+  registry: 'ghcr.io',
+  registryNamespace: 'keremar',
+  repositories: [
+    'user-service': 'todo-app-user-service'
+  ],
+  environment: params.DEPLOY_ENVIRONMENT,
+  branchName: env.SELECTED_BRANCH_NORMALIZED,
+  credentialsId: 'github-token'
+)
+```
+
+`branchName` keeps release policy inside the helper. When `branchName` is a
+`release/*` branch, the configured `environment` is applied to the pushed tag,
+for example:
+
+```text
+user-service:abc1234-v1.0-staging
+```
+
+When `branchName` is not a release branch, the helper keeps the source tag
+without appending `staging` or `prod`. This lets the same helper work for future
+non-release push flows without putting release policy logic in every
+Jenkinsfile.
+
+`pushToRegistry()` writes and archives:
+
+```text
+image-artifacts/pushed-images.txt
+```
+
+That file records the source image ref, final registry ref, and archive path
+that were pushed.
 
 ## Image Security Scan And SBOM
 
