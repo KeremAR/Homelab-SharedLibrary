@@ -89,6 +89,29 @@ That directory is backed by `jenkins-sonar-cache-pvc`, separate from the Jenkins
 tool cache. The tool cache stores the scanner binary; the Sonar cache stores
 scanner analyzer files reused by later builds.
 
+## Release Pod Template
+
+Manual release jobs use `releasePodTemplate()` instead of `ciLintPodTemplate()`.
+The release pod is intentionally smaller:
+
+```text
+jnlp
+docker
+docker-dind
+```
+
+Release jobs do not run Python linting, Node linting, unit tests, SonarQube,
+Hadolint, or Trivy. They only copy or build a Docker archive, load it into the
+pod-local Docker daemon, retag it, and push it to the registry.
+
+Even production releases need Docker graph storage because `docker load` writes
+the archived image layers into the Docker daemon before `docker tag` and
+`docker push` run. In the current setup the release pod still mounts the
+service-specific Docker cache PVC at `/var/lib/docker`, so release fallback
+builds can reuse cache. If a CI job and release job for the same service run at
+the same time, `ReadWriteOncePod` can make one pod wait for the cache PVC rather
+than letting two Docker daemons share the same data directory.
+
 ## Helper Overview
 
 - `runPythonLinting(targets: [...])` runs Python formatting and lint checks.
@@ -106,6 +129,8 @@ scanner analyzer files reused by later builds.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 - `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
+- `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
+- `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
 
 ## Lint Helpers
 
@@ -274,10 +299,11 @@ platform
 The release pipeline can get these files in two ways:
 
 ```text
-Use latest successful CI artifact
-  -> copyArtifacts(projectName: 'homelab-app-ci/<branch>', selector: lastSuccessful())
+Use CI artifact from latest completed CI build
+  -> copyArtifacts(projectName: 'homelab-app-ci/<branch>', selector: lastCompleted())
   -> image-artifacts/images.txt appears in the release job workspace
   -> image-artifacts/<image>.docker.tar appears in the release job workspace
+  -> image-artifacts/ci-success.txt must exist
 
 Build fallback
   -> runReleaseImages(...)
@@ -296,9 +322,20 @@ The Jenkins UI also filters branches per service, but the Jenkinsfile validation
 is the real guardrail because UI filters should not be trusted as the only
 protection.
 
-Production releases require `USE_LAST_SUCCESSFUL_CI_ARTIFACT=true`. Fallback
+Production releases require `USE_CI_ARTIFACT=true`. Fallback
 builds are allowed for staging, but production should promote an artifact that
 already passed the CI branch pipeline.
+
+The App CI pipeline calls `markReleaseCiArtifact()` only after release branch
+build, SBOM, and image scan stages complete successfully. That helper writes
+and archives `image-artifacts/ci-success.txt`. The release pipeline copies
+artifacts from the latest completed CI build and then requires that marker. If
+the latest CI build failed, the marker is missing and release stops instead of
+falling back to an older successful build.
+
+The release pipeline also checks that the commit embedded in `images.txt`
+matches the selected branch HEAD commit. This prevents promoting an artifact
+from an older commit after the release branch has moved.
 
 The helper then runs:
 
@@ -356,12 +393,11 @@ out and removes `$WORKSPACE/.docker` in a `finally` block. The release
 Jenkinsfile also runs `cleanWs(...)`, but the helper still cleans up its own
 registry auth files so it is safer when reused elsewhere.
 
-The current release job uses Copy Artifact's `lastSuccessful()` selector. That
-means it copies the latest successful CI build for the selected branch, not
-necessarily the newest commit if the newest CI run failed. Image tags include
-the commit hash, so the pushed tag still shows exactly which commit was
-promoted. A stricter future version can add an explicit `CI_BUILD_NUMBER`
-parameter and use `specific(...)` instead.
+The release job intentionally avoids Jenkins internal API calls for CI result
+checks. The success marker and commit comparison are ordinary workspace artifact
+checks, so they do not require Script Approval. A future UI improvement can add
+an explicit `CI_BUILD_NUMBER` selector, but dynamic build dropdowns usually
+require extra plugins or Jenkins-side scripting.
 
 ## Image Security Scan And SBOM
 

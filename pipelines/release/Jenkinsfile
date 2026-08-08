@@ -3,8 +3,7 @@
 pipeline {
     agent {
         kubernetes {
-            yaml ciLintPodTemplate(
-                images: releaseImages(),
+            yaml releasePodTemplate(
                 dockerCachePvc: releaseServiceConfig().dockerCachePvc
             )
             defaultContainer 'jnlp'
@@ -34,21 +33,49 @@ pipeline {
                     env.CI_JOB_FULL_NAME = "homelab-app-ci/${jenkinsBranchJobName(env.SELECTED_BRANCH_NORMALIZED)}"
 
                     validateBranchForService(env.SELECTED_BRANCH_NORMALIZED, service)
-                    validateReleaseMode(params.DEPLOY_ENVIRONMENT, params.USE_LAST_SUCCESSFUL_CI_ARTIFACT)
+                    boolean useCiArtifact = useCiArtifactParam()
+                    validateReleaseMode(params.DEPLOY_ENVIRONMENT, useCiArtifact)
 
                     echo "Release job service: ${service.name}"
                     echo "Selected branch: ${env.SELECTED_BRANCH_NORMALIZED}"
                     echo "Release branch mode: ${env.IS_RELEASE_BRANCH}"
                     echo "Selected branch CI job: ${env.CI_JOB_FULL_NAME}"
 
-                    if (params.USE_LAST_SUCCESSFUL_CI_ARTIFACT) {
+                    if (useCiArtifact) {
                         env.USE_CI_ARTIFACTS = 'true'
-                        echo "Will try image artifacts from latest successful CI build of ${env.CI_JOB_FULL_NAME}."
+                        echo "Will try image artifacts from latest completed CI build of ${env.CI_JOB_FULL_NAME}."
                         return
                     }
 
                     env.USE_CI_ARTIFACTS = 'false'
                     echo 'CI artifact reuse is disabled; this release job will build the image.'
+                }
+            }
+        }
+
+        stage('Checkout Selected Branch') {
+            steps {
+                script {
+                    Map checkoutResult = checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${env.SELECTED_BRANCH_NORMALIZED}"]],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/KeremAR/Homelab-App.git',
+                            credentialsId: 'github-token'
+                        ]]
+                    ])
+
+                    env.SELECTED_BRANCH_COMMIT = checkoutResult.GIT_COMMIT ?: ''
+                    if (!env.SELECTED_BRANCH_COMMIT) {
+                        env.SELECTED_BRANCH_COMMIT = sh(
+                            label: 'Resolve selected branch commit',
+                            returnStdout: true,
+                            script: 'git rev-parse HEAD'
+                        ).trim()
+                    }
+
+                    env.SELECTED_BRANCH_SHORT_COMMIT = env.SELECTED_BRANCH_COMMIT.take(7)
+                    echo "Selected branch commit: ${env.SELECTED_BRANCH_SHORT_COMMIT}"
                 }
             }
         }
@@ -60,26 +87,30 @@ pipeline {
             steps {
                 copyArtifacts(
                     projectName: env.CI_JOB_FULL_NAME,
-                    selector: lastSuccessful(),
+                    selector: lastCompleted(),
                     filter: 'image-artifacts/**',
-                    fingerprintArtifacts: true
+                    fingerprintArtifacts: true,
+                    resultVariableSuffix: 'SOURCE_CI'
                 )
             }
         }
 
-        stage('Checkout Selected Branch') {
+        stage('Validate CI Image Artifact') {
             when {
-                expression { env.USE_CI_ARTIFACTS != 'true' }
+                expression { env.USE_CI_ARTIFACTS == 'true' }
             }
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "*/${env.SELECTED_BRANCH_NORMALIZED}"]],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/KeremAR/Homelab-App.git',
-                        credentialsId: 'github-token'
-                    ]]
-                ])
+                script {
+                    Map service = releaseServiceConfig()
+                    validateCiSuccessMarker('image-artifacts/ci-success.txt')
+
+                    String artifactCommit = imageCommitFromManifest('image-artifacts/images.txt', service.name)
+                    if (artifactCommit != env.SELECTED_BRANCH_SHORT_COMMIT) {
+                        error "CI artifact commit ${artifactCommit} does not match selected branch HEAD ${env.SELECTED_BRANCH_SHORT_COMMIT}"
+                    }
+
+                    echo "Using CI build #${env.COPYARTIFACT_BUILD_NUMBER_SOURCE_CI ?: 'unknown'} artifact for ${service.name} at commit ${artifactCommit}"
+                }
             }
         }
 
@@ -137,6 +168,18 @@ private List releaseImages() {
 private Map registryRepositories() {
     Map service = releaseServiceConfig()
     return [(service.name): service.registryRepository]
+}
+
+private boolean useCiArtifactParam() {
+    if (params.containsKey('USE_CI_ARTIFACT')) {
+        return params.USE_CI_ARTIFACT as boolean
+    }
+
+    if (params.containsKey('USE_LAST_SUCCESSFUL_CI_ARTIFACT')) {
+        return params.USE_LAST_SUCCESSFUL_CI_ARTIFACT as boolean
+    }
+
+    return true
 }
 
 private Map releaseServiceConfig() {
@@ -206,6 +249,50 @@ private void validateReleaseMode(String deployEnvironment, boolean useCiArtifact
     if (deployEnvironment == 'prod' && !useCiArtifact) {
         error 'Production releases require a successful CI image artifact; fallback rebuild is allowed only for non-prod releases'
     }
+}
+
+private void validateCiSuccessMarker(String markerPath) {
+    if (!fileExists(markerPath)) {
+        error "Latest completed CI build did not publish ${markerPath}. The selected branch must finish CI successfully before release."
+    }
+}
+
+private String imageCommitFromManifest(String manifestPath, String serviceName) {
+    if (!fileExists(manifestPath)) {
+        error "Image artifact manifest does not exist: ${manifestPath}"
+    }
+
+    List<String> lines = readFile(manifestPath).readLines().findAll { line -> line.trim() }
+    String row = lines.find { line ->
+        List<String> fields = line.split('\t') as List<String>
+        fields.size() == 4 && fields[0] == serviceName
+    }
+
+    if (!row) {
+        error "Image artifact manifest does not contain service ${serviceName}: ${manifestPath}"
+    }
+
+    List<String> fields = row.split('\t') as List<String>
+    String imageRef = fields[1]
+    String tag = tagFromImageRef(imageRef)
+    String commit = tag.tokenize('-')[0]
+
+    if (!(commit ==~ /^[A-Fa-f0-9]{7,40}$/)) {
+        error "Could not read commit hash from image tag ${tag} in ${manifestPath}"
+    }
+
+    return commit.take(7)
+}
+
+private String tagFromImageRef(String imageRef) {
+    int slash = imageRef.lastIndexOf('/')
+    int colon = imageRef.lastIndexOf(':')
+
+    if (colon > slash && colon < imageRef.length() - 1) {
+        return imageRef.substring(colon + 1)
+    }
+
+    error "Image reference does not contain a tag: ${imageRef}"
 }
 
 private String jenkinsBranchJobName(String branch) {

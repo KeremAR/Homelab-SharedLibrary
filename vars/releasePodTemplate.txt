@@ -1,0 +1,31 @@
+<h2>releasePodTemplate</h2>
+
+<p>
+Returns the minimal Kubernetes pod template used by manual release pipelines.
+</p>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Includes only <code>jnlp</code>, <code>docker</code>, and <code>docker-dind</code>.</li>
+    <li>Mounts the configured Docker cache PVC at <code>/var/lib/docker</code>.</li>
+    <li>Falls back to an <code>emptyDir</code> Docker graph volume when no PVC is provided.</li>
+</ul>
+
+<h3>Example</h3>
+
+<pre>
+releasePodTemplate(
+    dockerCachePvc: 'jenkins-docker-cache-user-service-pvc'
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>dockerCachePvc</code>:
+        Optional PVC name used by the Docker-in-Docker sidecar for
+        <code>/var/lib/docker</code>.
+    </li>
+</ul>

@@ -1,0 +1,50 @@
+<h2>markReleaseCiArtifact</h2>
+
+<p>
+Writes and archives the release CI success marker used by manual release jobs.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+markReleaseCiArtifact(
+    outputDir: 'image-artifacts'
+)
+</pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li>
+        <code>outputDir</code>:
+        Directory containing image artifacts. Default:
+        <code>image-artifacts</code>.
+    </li>
+    <li>
+        <code>imageManifest</code>:
+        Manifest that must exist before the marker is written. Default:
+        <code>&lt;outputDir&gt;/images.txt</code>.
+    </li>
+    <li>
+        <code>markerFile</code>:
+        Marker file to write and archive. Default:
+        <code>&lt;outputDir&gt;/ci-success.txt</code>.
+    </li>
+    <li>
+        <code>branchName</code>:
+        Branch name. Default: <code>env.BRANCH_NAME</code>.
+    </li>
+    <li>
+        <code>onlyReleaseBranches</code>:
+        Skip non-release branches when enabled. Default: <code>true</code>.
+    </li>
+</ul>
+
+<h3>Output</h3>
+
+<ul>
+    <li>
+        Archives <code>image-artifacts/ci-success.txt</code> as a Jenkins
+        artifact.
+    </li>
+</ul>
