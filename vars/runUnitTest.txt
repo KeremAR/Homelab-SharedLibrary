@@ -48,6 +48,15 @@ runUnitTest(
     <li>Default pip cache path: <code>/cache/pip</code>.</li>
     <li>The virtualenv is ephemeral and lives under <code>$WORKSPACE/.venvs</code>.</li>
     <li>Persistent cache stores pip downloads/wheels, not executable environments.</li>
+    <li>
+        Dependency installation is protected by a Jenkins lock around
+        <code>pip install</code>, so parallel builds do not write to the same
+        persistent pip cache at the same time.
+    </li>
+    <li>
+        <code>pip install</code> is retried for transient network or cache read
+        errors.
+    </li>
 </ul>
 
 <h3>Top-Level Parameters</h3>
@@ -73,6 +82,15 @@ runUnitTest(
     <li>
         <code>pipCacheDir</code>:
         Mounted pip cache path. Default: <code>/cache/pip</code>.
+    </li>
+    <li>
+        <code>pipCacheLock</code>:
+        Lockable Resources name used while writing to the shared pip cache.
+        Default: <code>jenkins-pip-cache</code>.
+    </li>
+    <li>
+        <code>pipInstallRetries</code>:
+        Number of attempts for dependency installation. Default: <code>2</code>.
     </li>
     <li>
         <code>failFast</code>:

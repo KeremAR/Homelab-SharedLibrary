@@ -33,6 +33,8 @@ import com.company.jenkins.Validation
  *   - coverageDir: Repository-relative output directory (default: 'coverage-reports')
  *   - container: Container name to run in (default: 'python')
  *   - pipCacheDir: Mounted pip cache path (default: '/cache/pip')
+ *   - pipCacheLock: Lockable Resources name for shared pip cache writes (default: 'jenkins-pip-cache')
+ *   - pipInstallRetries: Retry count for transient pip/network errors (default: 2)
  *   - failFast: Whether parallel branches should fail fast (default: true)
  *
  * Service map keys:
@@ -69,6 +71,8 @@ def call(Map config = [:]) {
     String containerName = config.container ?: 'python'
     String coverageDir = Validation.relativePath((config.coverageDir ?: 'coverage-reports').toString(), 'Coverage report directory')
     String pipCacheDir = cachePath((config.pipCacheDir ?: '/cache/pip').toString(), 'pipCacheDir')
+    String pipCacheLock = lockName((config.pipCacheLock ?: 'jenkins-pip-cache').toString(), 'pipCacheLock')
+    int pipInstallRetries = parsePositiveInteger(config.pipInstallRetries ?: 2, 'pipInstallRetries')
     String defaultRequirementsFile = config.requirementsFile?.toString()
     boolean failFast = config.get('failFast', true)
 
@@ -87,7 +91,6 @@ def call(Map config = [:]) {
             container(containerName) {
                 validateServiceFiles(service)
 
-                int status = 0
                 withEnv([
                     "UNIT_SERVICE=${service.name}",
                     "UNIT_REPORT_NAME=${service.reportName}",
@@ -101,9 +104,8 @@ def call(Map config = [:]) {
                     "PIP_NO_CACHE_DIR=false",
                     "COVERAGE_THRESHOLD=${service.coverageThreshold == null ? '' : service.coverageThreshold.toString()}"
                 ]) {
-                    status = sh(
-                        label: "Pytest: ${service.name}",
-                        returnStatus: true,
+                    sh(
+                        label: "Prepare venv: ${service.name}",
                         script: '''
                             set -eu
 
@@ -114,10 +116,33 @@ def call(Map config = [:]) {
 
                             rm -rf "$VENV_PATH"
                             python -m venv "$VENV_PATH"
+                        '''
+                    )
 
-                            "$VENV_PATH/bin/python" -m pip install \
-                                --cache-dir "$PIP_CACHE_DIR" \
-                                -r "$WORKSPACE/$REQUIREMENTS_FILE"
+                    lock(resource: pipCacheLock) {
+                        retry(pipInstallRetries) {
+                            sh(
+                                label: "Install Python dependencies: ${service.name}",
+                                script: '''
+                                    set -eu
+
+                                    VENV_PATH="$WORKSPACE/.venvs/$UNIT_REPORT_NAME"
+
+                                    "$VENV_PATH/bin/python" -m pip install \
+                                        --cache-dir "$PIP_CACHE_DIR" \
+                                        -r "$WORKSPACE/$REQUIREMENTS_FILE"
+                                '''
+                            )
+                        }
+                    }
+
+                    int status = sh(
+                        label: "Pytest: ${service.name}",
+                        returnStatus: true,
+                        script: '''
+                            set -eu
+
+                            VENV_PATH="$WORKSPACE/.venvs/$UNIT_REPORT_NAME"
 
                             COVERAGE_FAIL_UNDER=""
                             if [ -n "$COVERAGE_THRESHOLD" ]; then
@@ -140,35 +165,35 @@ def call(Map config = [:]) {
                                 $COVERAGE_FAIL_UNDER
                         '''
                     )
-                }
 
-                String junitPath = "${reportDir}/junit.xml"
-                String coveragePath = "${reportDir}/coverage.xml"
+                    String junitPath = "${reportDir}/junit.xml"
+                    String coveragePath = "${reportDir}/coverage.xml"
 
-                if (fileExists(junitPath)) {
-                    junit(
-                        allowEmptyResults: false,
-                        testResults: junitPath
+                    if (fileExists(junitPath)) {
+                        junit(
+                            allowEmptyResults: false,
+                            testResults: junitPath
+                        )
+                    } else {
+                        echo "JUnit report was not generated for ${service.name}"
+                    }
+
+                    archiveArtifacts(
+                        allowEmptyArchive: true,
+                        artifacts: "${reportDir}/*.xml"
                     )
-                } else {
-                    echo "JUnit report was not generated for ${service.name}"
-                }
 
-                archiveArtifacts(
-                    allowEmptyArchive: true,
-                    artifacts: "${reportDir}/*.xml"
-                )
+                    if (status == 0 && !fileExists(junitPath)) {
+                        error "Tests succeeded but JUnit report is missing for ${service.name}"
+                    }
 
-                if (status == 0 && !fileExists(junitPath)) {
-                    error "Tests succeeded but JUnit report is missing for ${service.name}"
-                }
+                    if (status == 0 && !fileExists(coveragePath)) {
+                        error "Tests succeeded but coverage report is missing for ${service.name}"
+                    }
 
-                if (status == 0 && !fileExists(coveragePath)) {
-                    error "Tests succeeded but coverage report is missing for ${service.name}"
-                }
-
-                if (status != 0) {
-                    error "Unit tests failed for ${service.name}"
+                    if (status != 0) {
+                        error "Unit tests failed for ${service.name}"
+                    }
                 }
             }
         }
@@ -270,6 +295,23 @@ private Integer parseRequiredInteger(Object value, String label) {
     return parsed
 }
 
+private int parsePositiveInteger(Object value, String label) {
+    if (value == null || value.toString().trim() == '') {
+        throw new IllegalArgumentException("${label} cannot be empty")
+    }
+
+    if (!(value.toString() ==~ /^[0-9]+$/)) {
+        throw new IllegalArgumentException("${label} must be a positive integer: ${value}")
+    }
+
+    int parsed = value.toString().toInteger()
+    if (parsed < 1) {
+        throw new IllegalArgumentException("${label} must be greater than 0: ${value}")
+    }
+
+    return parsed
+}
+
 private String cachePath(String path, String label) {
     if (!path) {
         throw new IllegalArgumentException("${label} cannot be empty")
@@ -284,4 +326,17 @@ private String cachePath(String path, String label) {
     }
 
     return path
+}
+
+private String lockName(String value, String label) {
+    String normalized = value.trim()
+    if (!normalized) {
+        throw new IllegalArgumentException("${label} cannot be empty")
+    }
+
+    if (!(normalized ==~ /^[A-Za-z0-9_.:-]+$/)) {
+        throw new IllegalArgumentException("${label} contains unsupported characters: ${value}")
+    }
+
+    return normalized
 }
