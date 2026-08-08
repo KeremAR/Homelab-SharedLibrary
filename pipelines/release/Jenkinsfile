@@ -89,8 +89,7 @@ pipeline {
                     projectName: env.CI_JOB_FULL_NAME,
                     selector: lastCompleted(),
                     filter: 'image-artifacts/**',
-                    fingerprintArtifacts: true,
-                    resultVariableSuffix: 'SOURCE_CI'
+                    fingerprintArtifacts: true
                 )
             }
         }
@@ -109,7 +108,8 @@ pipeline {
                         error "CI artifact commit ${artifactCommit} does not match selected branch HEAD ${env.SELECTED_BRANCH_SHORT_COMMIT}"
                     }
 
-                    echo "Using CI build #${env.COPYARTIFACT_BUILD_NUMBER_SOURCE_CI ?: 'unknown'} artifact for ${service.name} at commit ${artifactCommit}"
+                    String ciBuildNumber = ciBuildNumberFromMarker('image-artifacts/ci-success.txt')
+                    echo "Using CI build #${ciBuildNumber} artifact for ${service.name} at commit ${artifactCommit}"
                 }
             }
         }
@@ -255,6 +255,14 @@ private void validateCiSuccessMarker(String markerPath) {
     if (!fileExists(markerPath)) {
         error "Latest completed CI build did not publish ${markerPath}. The selected branch must finish CI successfully before release."
     }
+}
+
+private String ciBuildNumberFromMarker(String markerPath) {
+    List<String> lines = readFile(markerPath).readLines().findAll { line -> line.trim() }
+    String buildLine = lines.find { line -> line.startsWith('build=') }
+    String buildNumber = buildLine ? buildLine.substring('build='.length()).trim() : ''
+
+    return buildNumber ?: 'unknown'
 }
 
 private String imageCommitFromManifest(String manifestPath, String serviceName) {
