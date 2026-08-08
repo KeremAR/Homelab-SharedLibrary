@@ -606,7 +606,7 @@ check service .coveragerc exists
 delete old report directory
 create fresh report directory
 create a fresh venv under $WORKSPACE/.venvs
-install requirements using persistent pip cache
+install requirements using persistent pip cache inside a Jenkins lock
 run pytest from inside the service directory with COVERAGE_RCFILE
 publish junit.xml to Jenkins test results
 archive junit.xml and coverage.xml as build artifacts
@@ -627,7 +627,9 @@ The helper functions run in this order:
 
 ```text
 cachePath
+lockName
 normalizeServices
+parsePositiveInteger
 parseRequiredInteger
 validateUniqueServiceNames
 validateServiceFiles
@@ -637,11 +639,19 @@ validateServiceFiles
 matters only because `pipCacheDir` is configurable. If the helper always
 hard-coded `/cache/pip`, this function could be removed.
 
+`lockName` validates the Jenkins Lockable Resources name used around
+`pip install`. The default is `jenkins-pip-cache`. This keeps multiple Jenkins
+agent pods from writing to the same persistent pip cache at the same time.
+
 `normalizeServices` converts each Jenkinsfile service map into one consistent
 internal structure. It fills defaults such as `target`, `testPath`,
 `coverageConfig`, `requirementsFile`, and `reportName`. Without it, the main
 pipeline code would need to repeat that defaulting logic inline, or every
 Jenkinsfile would need to provide every field perfectly.
+
+`parsePositiveInteger` validates retry counts such as `pipInstallRetries`.
+Without it, a typo such as `0` or a non-numeric value could disable retry
+behavior or fail later with a less clear Jenkins error.
 
 `parseRequiredInteger` is called while services are normalized and makes
 `coverageThreshold` explicit and safe. Without it, empty, non-numeric, or
@@ -678,6 +688,12 @@ This avoids sharing executable environments between jobs while still speeding up
 dependency installation.
 The Python runner image must not set `PIP_NO_CACHE_DIR=1`; the helper explicitly
 sets `PIP_CACHE_DIR` and passes `--cache-dir` to `pip install`.
+
+Because `/cache/pip` is a shared PVC-backed cache, dependency installation is
+wrapped with `lock(resource: 'jenkins-pip-cache')`. This does not serialize the
+whole unit test stage: venv creation and pytest can still run per service, but
+the cache-writing `pip install` step is protected. The install step is also
+retried twice by default for transient PyPI, network, or cache read errors.
 
 The pytest command produces two important files per service:
 
