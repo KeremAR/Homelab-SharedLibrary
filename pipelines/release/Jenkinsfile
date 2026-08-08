@@ -18,6 +18,7 @@ pipeline {
         ))
         skipDefaultCheckout(true)
         timestamps()
+        withBuildUser()
         disableConcurrentBuilds()
         timeout(time: 30, unit: 'MINUTES')
     }
@@ -35,6 +36,7 @@ pipeline {
                     validateBranchForService(env.SELECTED_BRANCH_NORMALIZED, service)
                     boolean useCiArtifact = useCiArtifactParam()
                     validateReleaseMode(params.DEPLOY_ENVIRONMENT, useCiArtifact)
+                    setBuildSummary(service, params.DEPLOY_ENVIRONMENT, env.SELECTED_BRANCH_NORMALIZED, useCiArtifact)
 
                     echo "Release job service: ${service.name}"
                     echo "Selected branch: ${env.SELECTED_BRANCH_NORMALIZED}"
@@ -180,6 +182,13 @@ private boolean useCiArtifactParam() {
     }
 
     return true
+}
+
+private void setBuildSummary(Map service, String deployEnvironment, String branch, boolean useCiArtifact) {
+    String user = env.BUILD_USER ?: env.BUILD_USER_ID ?: 'unknown'
+    String artifactMode = useCiArtifact ? 'ci-artifact' : 'self-build'
+
+    currentBuild.description = "User: ${user} / env: ${deployEnvironment} / branch: ${branch} / service: ${service.name} / mode: ${artifactMode}"
 }
 
 private Map releaseServiceConfig() {
