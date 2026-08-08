@@ -188,7 +188,7 @@ private void setBuildSummary(Map service, String deployEnvironment, String branc
     String user = env.BUILD_USER ?: env.BUILD_USER_ID ?: 'unknown'
     String artifactMode = useCiArtifact ? 'ci-artifact' : 'self-build'
 
-    currentBuild.description = "User: ${user} / env: ${deployEnvironment} / branch: ${branch} / service: ${service.name} / mode: ${artifactMode}"
+    currentBuild.description = "User: ${user} / env: ${deployEnvironment} / branch: ${branch} / mode: ${artifactMode}"
 }
 
 private Map releaseServiceConfig() {
