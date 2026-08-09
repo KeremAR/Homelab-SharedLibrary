@@ -115,9 +115,11 @@ The `kubernetes` container uses the custom image:
 ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-argocd-3.4.2-rollouts-1.9.1
 ```
 
-It includes shell utilities, `kubectl`, `argocd`, and the Argo Rollouts kubectl
-plugin. Deployment helpers use `container('kubernetes')`, so this one container
-can cover kubectl deploys and future ArgoCD release steps.
+It is a lightweight Alpine-based image with `sh`, `kubectl`, `argocd`, and the
+Argo Rollouts kubectl plugin. Deployment helpers use `container('kubernetes')`,
+so this one container can cover kubectl deploys and future ArgoCD release
+steps. Git and Docker stay in the `jnlp` and `docker` containers instead of this
+image.
 
 Even production releases need Docker graph storage because `docker load` writes
 the archived image layers into the Docker daemon before `docker tag` and
