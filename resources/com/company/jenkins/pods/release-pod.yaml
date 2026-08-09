@@ -6,6 +6,8 @@ metadata:
 spec:
   serviceAccountName: jenkins
   automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: ghcr-creds
   dnsConfig:
     options:
       - name: ndots

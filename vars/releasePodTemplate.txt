@@ -8,6 +8,7 @@ Returns the minimal Kubernetes pod template used by manual release pipelines.
 
 <ul>
     <li>Includes only <code>jnlp</code>, <code>docker</code>, <code>docker-dind</code>, and <code>kubernetes</code>.</li>
+    <li>Uses <code>ghcr-creds</code> as an image pull secret for private GHCR images.</li>
     <li>Mounts the configured Docker cache PVC at <code>/var/lib/docker</code>.</li>
     <li>Falls back to an <code>emptyDir</code> Docker graph volume when no PVC is provided.</li>
     <li>Uses the custom <code>ghcr.io/keremar/kubernetes-tools</code> image for kubectl, ArgoCD CLI, and Argo Rollouts CLI.</li>

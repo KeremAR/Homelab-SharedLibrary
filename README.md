@@ -101,6 +101,9 @@ docker-dind
 kubernetes
 ```
 
+It also uses the `ghcr-creds` image pull secret because the custom Kubernetes
+tools image is stored in GHCR.
+
 Release jobs do not run Python linting, Node linting, unit tests, SonarQube,
 Hadolint, or Trivy. They only copy or build a Docker archive, load it into the
 pod-local Docker daemon, retag it, push it to the registry, and optionally run
