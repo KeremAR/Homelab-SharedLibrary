@@ -147,7 +147,8 @@ than letting two Docker daemons share the same data directory.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 - `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
 - `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, serializes repo/branch pushes, and retries rejected pushes with fetch/rebase.
-- `deployWithKubectl(service: '...')` applies Kubernetes manifests with the pushed registry image.
+- `deployWithKubectl(service: '...')` updates manifests and applies them with kubectl.
+- `deployWithArgoKubectl(service: '...')` updates manifests and lets ArgoCD sync them.
 - `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
 - `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
 
@@ -407,7 +408,30 @@ image-artifacts/pushed-images.txt
 That file records the source image ref, final registry ref, and archive path
 that were pushed.
 
-When the release job `DEPLOY` parameter is selected, `deployWithKubectl()` runs
+When the release job `DEPLOY` parameter is selected, the current GitOps release
+flow runs `deployWithArgoKubectl()` after the registry push:
+
+```text
+read image-artifacts/pushed-images.txt
+updateGithub takes a repository/branch lock
+updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
+updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
+ArgoCD detects the Git change
+ArgoCD syncs the matching Application
+```
+
+The GitOps helper does not need a kubeconfig and does not run
+`kubectl apply`. It maps `DEPLOY_ENVIRONMENT=prod` to the Kubernetes namespace
+and manifest folder `production`, while the image tag keeps the shorter `prod`
+suffix.
+
+The lock matters when two release pipelines update the same config repository
+branch at the same time. Without it, both jobs can checkout the same old
+`main`, create different commits, and one push can be rejected because the
+remote branch moved. The retry protects the remaining edge case where something
+outside Jenkins updates the branch between checkout and push.
+
+If the direct kubectl deploy path is used instead, `deployWithKubectl()` runs
 after the registry push:
 
 ```text
@@ -419,24 +443,23 @@ write kubeconfig from the Jenkins kubeconfig credential
 kubectl apply -f 3-Kubectl-Deploy/<environment>/<service>/templates
 ```
 
-The helper uses the `kubernetes` container from `releasePodTemplate()`. It maps
-`DEPLOY_ENVIRONMENT=prod` to the Kubernetes namespace and manifest folder
-`production`, while the image tag keeps the shorter `prod` suffix.
+The direct kubectl helper uses the `kubernetes` container from
+`releasePodTemplate()`. It maps `DEPLOY_ENVIRONMENT=prod` to the Kubernetes
+namespace and manifest folder `production`, while the image tag keeps the
+shorter `prod` suffix.
 
-The lock matters when two release pipelines update the same config repository
-branch at the same time. Without it, both jobs can checkout the same old
-`main`, create different commits, and one push can be rejected because the
-remote branch moved. The retry protects the remaining edge case where something
-outside Jenkins updates the branch between checkout and push.
+The release pod does not mount its Kubernetes ServiceAccount token. In the
+direct kubectl path, deploy permission comes from the Jenkins Secret Text
+credential named `kubeconfig`. In this setup that credential stores a base64
+encoded kubeconfig from `KUBECONFIG_B64`. Base64 is used because the kubeconfig
+moves through `.env`, `envsubst`, a Kubernetes Secret, Jenkins env, and JCasC as
+one line. It is not a Kubernetes `stringData` requirement. This keeps deploy
+authorization explicit and avoids giving the Jenkins pod ServiceAccount
+application namespace permissions by default.
 
-The release pod does not mount its Kubernetes ServiceAccount token. Deploy
-permission comes from the Jenkins Secret Text credential named `kubeconfig`.
-In this setup that credential stores a base64 encoded kubeconfig from
-`KUBECONFIG_B64`. Base64 is used because the kubeconfig moves through `.env`,
-`envsubst`, a Kubernetes Secret, Jenkins env, and JCasC as one line. It is not a
-Kubernetes `stringData` requirement. This keeps deploy authorization explicit
-and avoids giving the Jenkins pod ServiceAccount application namespace
-permissions by default.
+The GitOps release flow should prefer `deployWithArgoKubectl()` so Jenkins
+changes Git and ArgoCD performs the cluster update. Keep `deployWithKubectl()`
+for fallback/manual direct apply flows.
 
 `pushToRegistry()` logs in with Jenkins credentials, pushes the image, then logs
 out and removes `$WORKSPACE/.docker` in a `finally` block. The release

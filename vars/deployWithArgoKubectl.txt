@@ -1,0 +1,47 @@
+<h2>deployWithArgoKubectl</h2>
+
+<p>
+Requests a GitOps deployment by updating the Kubernetes config repository.
+ArgoCD performs the actual cluster sync after it sees the Git change.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+deployWithArgoKubectl(
+    service: 'todo-service',
+    environment: 'staging',
+    pushedManifest: 'image-artifacts/pushed-images.txt',
+    configRepoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+    configRepoBranch: 'main',
+    manifestsRoot: '3-Kubectl-Deploy'
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Reads the pushed registry image from <code>pushed-images.txt</code>.</li>
+    <li>Calls <code>updateGithub</code> to update and push the source-controlled <code>deployment.yaml</code>.</li>
+    <li>Does not run <code>kubectl apply</code>.</li>
+    <li>Does not require a Jenkins kubeconfig credential.</li>
+    <li>Relies on ArgoCD automated sync to apply the manifest change.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>service</code>: Required service name.</li>
+    <li><code>environment</code>: Required deploy environment. Supports <code>staging</code>, <code>prod</code>, and <code>production</code>.</li>
+    <li><code>pushedManifest</code>: Path to <code>pushed-images.txt</code>. Default: <code>image-artifacts/pushed-images.txt</code>.</li>
+    <li><code>configRepoUrl</code>: Required Git URL of the Kubernetes config repository.</li>
+    <li><code>configRepoBranch</code>: Config repository branch. Default: <code>main</code>.</li>
+    <li><code>configRepoDir</code>: Checkout directory. Default: <code>deploy-config</code>.</li>
+    <li><code>manifestsRoot</code>: Manifest root inside config repo. Default: <code>3-Kubectl-Deploy</code>.</li>
+    <li><code>credentialsId</code>: Git credentials id. Default: <code>github-token</code>.</li>
+    <li><code>namespace</code>: Kubernetes namespace override. By default, <code>prod</code> maps to <code>production</code>.</li>
+    <li><code>containerName</code>: Container name in the Kubernetes manifest. Default: service name.</li>
+    <li><code>argoApplication</code>: Optional ArgoCD Application name for log output. Default: <code>&lt;namespace&gt;-&lt;service&gt;</code>.</li>
+    <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
+    <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>
+</ul>

@@ -149,22 +149,21 @@ pipeline {
             }
         }
 
-        stage('Deploy with Kubectl') {
+        stage('Deploy with ArgoCD') {
             when {
                 expression { env.DEPLOY_ENABLED == 'true' }
             }
             steps {
                 script {
                     Map service = releaseServiceConfig()
-                    deployWithKubectl(
+                    deployWithArgoKubectl(
                         service: service.name,
                         environment: params.DEPLOY_ENVIRONMENT,
                         pushedManifest: 'image-artifacts/pushed-images.txt',
                         configRepoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
                         configRepoBranch: 'main',
                         manifestsRoot: '3-Kubectl-Deploy',
-                        credentialsId: 'github-token',
-                        kubeconfigCredentialsId: 'kubeconfig'
+                        credentialsId: 'github-token'
                     )
                 }
             }
