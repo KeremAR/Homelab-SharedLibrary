@@ -492,7 +492,6 @@ write kubeconfig from the Jenkins kubeconfig credential
 helm upgrade --install <namespace>-<service> 6-Helm-Deploy/<service>
   --namespace <namespace>
   --values 6-Helm-Deploy/<service>/values-<environment>.yaml
-  --take-ownership
 ```
 
 In this Helm flow the deployable desired state is the environment values file,
@@ -500,6 +499,11 @@ not the raw Kubernetes `deployment.yaml` image field. `DEPLOY_ENVIRONMENT=prod`
 maps to namespace `production` and to `values-production.yaml`. The image tag
 itself may still contain the shorter `prod` suffix because that tag is produced
 earlier by `pushToRegistry()`.
+
+`takeOwnership` defaults to `false` for normal Helm releases. Set it to `true`
+only for the first adoption run when Helm must take over resources that already
+exist from the plain-manifest phase. After Helm owns the release, leaving
+`--take-ownership` on every deploy is unnecessary.
 
 `deployWithHelm()` still uses the same explicit kubeconfig credential model as
 `deployWithKubectl()`. The difference is the apply engine: Helm renders the

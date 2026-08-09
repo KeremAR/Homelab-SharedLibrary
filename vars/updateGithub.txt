@@ -40,6 +40,7 @@ updateGithub(
     <li>Updates the selected repository-relative file.</li>
     <li>For <code>kubernetesContainerImage</code>, patches the <code>image:</code> field under the named container.</li>
     <li>For <code>helmImageTag</code>, patches <code>image.tag</code> under the top-level <code>image:</code> block.</li>
+    <li><code>helmImageTag</code> intentionally ignores nested blocks such as <code>database.image.tag</code>.</li>
     <li>Commits and pushes the change only when the file actually changed.</li>
     <li>Serializes updates to the same repository and branch with Jenkins Lockable Resources.</li>
     <li>If the remote branch changes before push, fetches, rebases, and retries the push.</li>

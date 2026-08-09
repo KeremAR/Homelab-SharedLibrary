@@ -38,7 +38,7 @@ import com.company.jenkins.Validation
  *   - releaseName: Helm release name override (default: '<namespace>-<service>')
  *   - helmContainer: Jenkins Kubernetes container name (default: 'kubernetes')
  *   - apply: Whether to run helm upgrade after Git update (default: true)
- *   - takeOwnership: Pass --take-ownership to Helm (default: true)
+ *   - takeOwnership: Pass --take-ownership to Helm (default: false)
  *   - createNamespace: Pass --create-namespace to Helm (default: true)
  *   - extraArgs: Optional list of additional Helm CLI args
  *   - gitUserName: Commit user name (default: 'Jenkins CI')
@@ -67,7 +67,7 @@ def call(Map config = [:]) {
     boolean kubeconfigIsBase64 = config.get('kubeconfigIsBase64', true)
     String helmContainer = (config.helmContainer ?: 'kubernetes').toString()
     boolean applyEnabled = config.get('apply', true)
-    boolean takeOwnership = config.get('takeOwnership', true)
+    boolean takeOwnership = config.get('takeOwnership', false)
     boolean createNamespace = config.get('createNamespace', true)
     List<String> extraArgs = (config.extraArgs ?: []).collect { safeHelmArg(it.toString()) }
     String gitUserName = (config.gitUserName ?: 'Jenkins CI').toString()

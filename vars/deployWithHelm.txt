@@ -38,6 +38,6 @@ deployWithHelm(
     <li><code>configRepoBranch</code>: Config repository branch. Default: <code>main</code>.</li>
     <li><code>helmRoot</code>: Helm chart root inside the config repository. Default: <code>6-Helm-Deploy</code>.</li>
     <li><code>apply</code>: Whether to run Helm after the Git update. Default: <code>true</code>.</li>
-    <li><code>takeOwnership</code>: Whether to pass <code>--take-ownership</code>. Default: <code>true</code>.</li>
+    <li><code>takeOwnership</code>: Whether to pass <code>--take-ownership</code>. Default: <code>false</code>. Use <code>true</code> only while adopting resources that already exist outside Helm.</li>
     <li><code>kubeconfigCredentialsId</code>: Jenkins Secret Text credential containing kubeconfig. Default: <code>kubeconfig</code>.</li>
 </ul>

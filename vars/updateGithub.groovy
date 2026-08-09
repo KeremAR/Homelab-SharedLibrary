@@ -163,7 +163,7 @@ def call(Map config = [:]) {
                             }
                         else
                             awk -v tag="$GITHUB_UPDATE_IMAGE_TAG" '
-                                /^[[:space:]]*image:[[:space:]]*$/ {
+                                /^image:[[:space:]]*$/ {
                                     in_image = 1
                                     print
                                     next
@@ -178,6 +178,7 @@ def call(Map config = [:]) {
                                     sub(/tag:.*/, "", indent)
                                     print indent "tag: " tag
                                     patched_tag = 1
+                                    in_image = 0
                                     next
                                 }
 
