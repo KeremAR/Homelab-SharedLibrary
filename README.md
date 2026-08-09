@@ -144,7 +144,7 @@ than letting two Docker daemons share the same data directory.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 - `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
-- `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, and pushes it back.
+- `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, serializes repo/branch pushes, and retries rejected pushes with fetch/rebase.
 - `deployWithKubectl(service: '...')` applies Kubernetes manifests with the pushed registry image.
 - `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
 - `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
@@ -410,14 +410,22 @@ after the registry push:
 
 ```text
 read image-artifacts/pushed-images.txt
+updateGithub takes a repository/branch lock
 updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
+updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
 write kubeconfig from the Jenkins kubeconfig credential
 kubectl apply -f 3-Kubectl-Deploy/<environment>/<service>/templates
 ```
 
-The helper uses the `kubectl` container from `releasePodTemplate()`. It maps
+The helper uses the `kubernetes` container from `releasePodTemplate()`. It maps
 `DEPLOY_ENVIRONMENT=prod` to the Kubernetes namespace and manifest folder
 `production`, while the image tag keeps the shorter `prod` suffix.
+
+The lock matters when two release pipelines update the same config repository
+branch at the same time. Without it, both jobs can checkout the same old
+`main`, create different commits, and one push can be rejected because the
+remote branch moved. The retry protects the remaining edge case where something
+outside Jenkins updates the branch between checkout and push.
 
 The release pod does not mount its Kubernetes ServiceAccount token. Deploy
 permission comes from the Jenkins Secret Text credential named `kubeconfig`.

@@ -25,6 +25,8 @@ updateGithub(
     <li>Updates the selected repository-relative file.</li>
     <li>For <code>kubernetesContainerImage</code>, patches the <code>image:</code> field under the named container.</li>
     <li>Commits and pushes the change only when the file actually changed.</li>
+    <li>Serializes updates to the same repository and branch with Jenkins Lockable Resources.</li>
+    <li>If the remote branch changes before push, fetches, rebases, and retries the push.</li>
     <li>Restores the clean remote URL after pushing so tokenized remotes are not left behind.</li>
 </ul>
 
@@ -42,4 +44,6 @@ updateGithub(
     <li><code>commitMessage</code>: Optional commit message.</li>
     <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
     <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>
+    <li><code>lockResource</code>: Optional explicit lock name. Default is generated from repository and branch.</li>
+    <li><code>maxPushRetries</code>: Push attempts after fetch/rebase. Default: <code>3</code>.</li>
 </ul>

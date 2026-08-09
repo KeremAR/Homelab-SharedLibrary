@@ -17,6 +17,8 @@ import com.company.jenkins.Validation
  * - Requires an HTTPS Git URL so credentials can be injected only for push
  * - Restores the clean remote URL when the shell exits
  * - Validates repository-relative paths and image references
+ * - Serializes updates to the same repository and branch with Jenkins locks
+ * - Retries rejected pushes after fetch/rebase when the remote branch moved
  *
  * @param config Map containing:
  *   - repoUrl: REQUIRED - HTTPS Git repository URL
@@ -30,6 +32,8 @@ import com.company.jenkins.Validation
  *   - commitMessage: Optional commit message
  *   - gitUserName: Commit user name (default: 'Jenkins CI')
  *   - gitUserEmail: Commit user email (default: 'jenkins@ci.local')
+ *   - lockResource: Lockable Resources name used to serialize repo/branch updates
+ *   - maxPushRetries: Number of push attempts after fetch/rebase (default: 3)
  *
  * @example
  * updateGithub(
@@ -59,96 +63,125 @@ def call(Map config = [:]) {
     String containerName = resourceName(required(config, 'containerName').toString(), 'containerName')
     String image = imageReference(required(config, 'image').toString(), 'image')
     String commitMessage = (config.commitMessage ?: "ci: update ${containerName} image to ${image}").toString()
+    String lockResource = lockResourceName(
+        (config.lockResource ?: "github-update-${lockKey(repoAuthPath)}-${lockKey(branch)}").toString()
+    )
+    int maxPushRetries = positiveInt(config.maxPushRetries ?: 3, 'maxPushRetries')
 
-    dir(checkoutDir) {
-        deleteDir()
-        checkout([
-            $class: 'GitSCM',
-            branches: [[name: "*/${branch}"]],
-            userRemoteConfigs: [[
-                url: repoUrl,
-                credentialsId: credentialsId
-            ]]
-        ])
-    }
+    echo "Waiting for GitHub update lock: ${lockResource}"
+    lock(resource: lockResource) {
+        dir(checkoutDir) {
+            deleteDir()
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: "*/${branch}"]],
+                userRemoteConfigs: [[
+                    url: repoUrl,
+                    credentialsId: credentialsId
+                ]]
+            ])
+        }
 
-    String workspaceFile = "${checkoutDir}/${file}"
-    if (!fileExists(workspaceFile)) {
-        error "GitHub update target file does not exist: ${workspaceFile}"
-    }
+        String workspaceFile = "${checkoutDir}/${file}"
+        if (!fileExists(workspaceFile)) {
+            error "GitHub update target file does not exist: ${workspaceFile}"
+        }
 
-    withCredentials([
-        usernamePassword(credentialsId: credentialsId, usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')
-    ]) {
-        withEnv([
-            "GITHUB_UPDATE_REPO_DIR=${checkoutDir}",
-            "GITHUB_UPDATE_BRANCH=${branch}",
-            "GITHUB_UPDATE_REPO_URL=${repoUrl}",
-            "GITHUB_UPDATE_REPO_AUTH_PATH=${repoAuthPath}",
-            "GITHUB_UPDATE_FILE=${file}",
-            "GITHUB_UPDATE_CONTAINER=${containerName}",
-            "GITHUB_UPDATE_IMAGE=${image}",
-            "GITHUB_UPDATE_COMMIT_MESSAGE=${commitMessage}",
-            "GITHUB_UPDATE_USER_NAME=${gitUserName}",
-            "GITHUB_UPDATE_USER_EMAIL=${gitUserEmail}"
+        withCredentials([
+            usernamePassword(credentialsId: credentialsId, usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')
         ]) {
-            sh(
-                label: "Update GitHub file",
-                script: '''
-                    set -eu
+            withEnv([
+                "GITHUB_UPDATE_REPO_DIR=${checkoutDir}",
+                "GITHUB_UPDATE_BRANCH=${branch}",
+                "GITHUB_UPDATE_REPO_URL=${repoUrl}",
+                "GITHUB_UPDATE_REPO_AUTH_PATH=${repoAuthPath}",
+                "GITHUB_UPDATE_FILE=${file}",
+                "GITHUB_UPDATE_CONTAINER=${containerName}",
+                "GITHUB_UPDATE_IMAGE=${image}",
+                "GITHUB_UPDATE_COMMIT_MESSAGE=${commitMessage}",
+                "GITHUB_UPDATE_USER_NAME=${gitUserName}",
+                "GITHUB_UPDATE_USER_EMAIL=${gitUserEmail}",
+                "GITHUB_UPDATE_MAX_PUSH_RETRIES=${maxPushRetries.toString()}"
+            ]) {
+                sh(
+                    label: "Update GitHub file",
+                    script: '''
+                        set -eu
 
-                    cd "$WORKSPACE/$GITHUB_UPDATE_REPO_DIR"
-                    trap 'git remote set-url origin "$GITHUB_UPDATE_REPO_URL" 2>/dev/null || true' EXIT
+                        cd "$WORKSPACE/$GITHUB_UPDATE_REPO_DIR"
+                        trap 'git remote set-url origin "$GITHUB_UPDATE_REPO_URL" 2>/dev/null || true' EXIT
 
-                    awk -v container="$GITHUB_UPDATE_CONTAINER" -v image="$GITHUB_UPDATE_IMAGE" '
-                        /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
-                            name = $0
-                            sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", name)
-                            gsub(/["'\\''"]/, "", name)
-                            in_target = (name == container)
-                        }
-
-                        in_target && /^[[:space:]]*image:[[:space:]]*/ {
-                            indent = $0
-                            sub(/image:.*/, "", indent)
-                            print indent "image: " image
-                            patched = 1
-                            in_target = 0
-                            next
-                        }
-
-                        { print }
-
-                        END {
-                            if (!patched) {
-                                exit 42
+                        awk -v container="$GITHUB_UPDATE_CONTAINER" -v image="$GITHUB_UPDATE_IMAGE" '
+                            /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+                                name = $0
+                                sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", name)
+                                gsub(/["'\\''"]/, "", name)
+                                in_target = (name == container)
                             }
+
+                            in_target && /^[[:space:]]*image:[[:space:]]*/ {
+                                indent = $0
+                                sub(/image:.*/, "", indent)
+                                print indent "image: " image
+                                patched = 1
+                                in_target = 0
+                                next
+                            }
+
+                            { print }
+
+                            END {
+                                if (!patched) {
+                                    exit 42
+                                }
+                            }
+                        ' "$GITHUB_UPDATE_FILE" > "$GITHUB_UPDATE_FILE.tmp" || {
+                            echo "Could not patch image for container $GITHUB_UPDATE_CONTAINER in $GITHUB_UPDATE_FILE" >&2
+                            exit 1
                         }
-                    ' "$GITHUB_UPDATE_FILE" > "$GITHUB_UPDATE_FILE.tmp" || {
-                        echo "Could not patch image for container $GITHUB_UPDATE_CONTAINER in $GITHUB_UPDATE_FILE" >&2
-                        exit 1
-                    }
 
-                    mv "$GITHUB_UPDATE_FILE.tmp" "$GITHUB_UPDATE_FILE"
+                        mv "$GITHUB_UPDATE_FILE.tmp" "$GITHUB_UPDATE_FILE"
 
-                    if git diff --quiet -- "$GITHUB_UPDATE_FILE"; then
-                        echo "GitHub file already has the requested value; nothing to commit."
-                        exit 0
-                    fi
+                        if git diff --quiet -- "$GITHUB_UPDATE_FILE"; then
+                            echo "GitHub file already has the requested value; nothing to commit."
+                            exit 0
+                        fi
 
-                    echo "GitHub file change:"
-                    git --no-pager diff -- "$GITHUB_UPDATE_FILE"
+                        echo "GitHub file change:"
+                        git --no-pager diff -- "$GITHUB_UPDATE_FILE"
 
-                    git config user.name "$GITHUB_UPDATE_USER_NAME"
-                    git config user.email "$GITHUB_UPDATE_USER_EMAIL"
-                    git add "$GITHUB_UPDATE_FILE"
-                    git commit -m "$GITHUB_UPDATE_COMMIT_MESSAGE"
+                        git config user.name "$GITHUB_UPDATE_USER_NAME"
+                        git config user.email "$GITHUB_UPDATE_USER_EMAIL"
+                        git add "$GITHUB_UPDATE_FILE"
+                        git commit -m "$GITHUB_UPDATE_COMMIT_MESSAGE"
 
-                    git remote set-url origin "https://${GIT_USERNAME}:${GIT_PASSWORD}@${GITHUB_UPDATE_REPO_AUTH_PATH}"
-                    git push origin "HEAD:${GITHUB_UPDATE_BRANCH}"
-                    git remote set-url origin "$GITHUB_UPDATE_REPO_URL"
-                '''
-            )
+                        git remote set-url origin "https://${GIT_USERNAME}:${GIT_PASSWORD}@${GITHUB_UPDATE_REPO_AUTH_PATH}"
+
+                        attempt=1
+                        while [ "$attempt" -le "$GITHUB_UPDATE_MAX_PUSH_RETRIES" ]; do
+                            if git push origin "HEAD:${GITHUB_UPDATE_BRANCH}"; then
+                                echo "GitHub push succeeded on attempt $attempt."
+                                exit 0
+                            fi
+
+                            if [ "$attempt" -eq "$GITHUB_UPDATE_MAX_PUSH_RETRIES" ]; then
+                                echo "GitHub push failed after $attempt attempts." >&2
+                                exit 1
+                            fi
+
+                            echo "GitHub push was rejected; fetching and rebasing before retry $((attempt + 1))."
+                            git fetch origin "$GITHUB_UPDATE_BRANCH"
+                            git rebase FETCH_HEAD || {
+                                git rebase --abort 2>/dev/null || true
+                                echo "Could not rebase GitHub update on origin/$GITHUB_UPDATE_BRANCH." >&2
+                                exit 1
+                            }
+
+                            attempt=$((attempt + 1))
+                        done
+                    '''
+                )
+            }
         }
     }
 
@@ -161,6 +194,39 @@ private Object required(Map config, String key) {
     }
 
     return config[key]
+}
+
+private int positiveInt(Object value, String label) {
+    String normalized = value.toString().trim()
+    if (!(normalized ==~ /^[1-9][0-9]*$/)) {
+        error "${label} must be a positive integer: ${value}"
+    }
+
+    return normalized.toInteger()
+}
+
+private String lockResourceName(String value) {
+    String normalized = value.trim()
+    if (!normalized || normalized.startsWith('-') || normalized.contains('..')) {
+        error "Invalid lockResource: ${value}"
+    }
+
+    if (!(normalized ==~ /^[A-Za-z0-9_.:-]+$/)) {
+        error "Invalid characters in lockResource: ${value}"
+    }
+
+    return normalized
+}
+
+private String lockKey(String value) {
+    String normalized = value.trim().replaceAll(/[^A-Za-z0-9_.-]+/, '-')
+    normalized = normalized.replaceAll(/^-+/, '').replaceAll(/-+$/, '')
+
+    if (!normalized) {
+        return 'default'
+    }
+
+    return normalized.take(120)
 }
 
 private String branchName(String value, String label) {
