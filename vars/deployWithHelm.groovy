@@ -12,8 +12,8 @@ import com.company.jenkins.Validation
  *
  * DEPLOY BEHAVIOR:
  * - Reads the pushed registry image for the selected service
- * - Updates image.repository and image.tag in values-staging.yaml or
- *   values-production.yaml through updateGithub
+ * - Updates image.tag in values-staging.yaml or values-production.yaml through
+ *   updateGithub
  * - Runs helm upgrade --install from the updated config repository checkout
  * - Does not run helm --wait by default, so rollout observation stays external
  *
@@ -78,7 +78,6 @@ def call(Map config = [:]) {
     }
 
     String imageRef = pushedImageRef(readFile(pushedManifest), pushedManifest, service)
-    String imageRepository = repositoryFromImageRef(imageRef)
     String imageTag = tagFromImageRef(imageRef)
     String chartDir = "${helmRoot}/${service}"
     String valuesFile = "${chartDir}/values-${valuesSuffix}.yaml"
@@ -89,8 +88,7 @@ def call(Map config = [:]) {
         checkoutDir: configRepoDir,
         credentialsId: credentialsId,
         file: valuesFile,
-        operation: 'helmImageValues',
-        imageRepository: imageRepository,
+        operation: 'helmImageTag',
         imageTag: imageTag,
         commitMessage: "ci: update ${service} Helm image to ${imageRef}",
         gitUserName: gitUserName,
@@ -150,7 +148,7 @@ def call(Map config = [:]) {
                             --namespace "$HELM_NAMESPACE" \
                             --values "$WORKSPACE/$HELM_VALUES_FILE" \
                             $args \
-                            $HELM_EXTRA_ARGS
+                            ${HELM_EXTRA_ARGS:-}
 
                         helm status "$HELM_RELEASE" -n "$HELM_NAMESPACE"
                     '''
@@ -246,17 +244,6 @@ private String imageReference(String value, String label) {
     }
 
     return normalized
-}
-
-private String repositoryFromImageRef(String imageRef) {
-    int slash = imageRef.lastIndexOf('/')
-    int colon = imageRef.lastIndexOf(':')
-
-    if (colon > slash) {
-        return imageRef.substring(0, colon)
-    }
-
-    error "Image reference does not contain a tag: ${imageRef}"
 }
 
 private String tagFromImageRef(String imageRef) {

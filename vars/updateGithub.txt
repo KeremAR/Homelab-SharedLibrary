@@ -20,15 +20,14 @@ updateGithub(
 )
 </pre>
 
-<h4>Helm values image</h4>
+<h4>Helm values image tag</h4>
 
 <pre>
 updateGithub(
     repoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
     branch: 'main',
     file: '6-Helm-Deploy/user-service/values-staging.yaml',
-    operation: 'helmImageValues',
-    imageRepository: 'ghcr.io/keremar/todo-app-user-service',
+    operation: 'helmImageTag',
     imageTag: 'abc1234-v1.0-staging',
     credentialsId: 'github-token'
 )
@@ -40,7 +39,7 @@ updateGithub(
     <li>Checks out the target GitHub repository into the workspace.</li>
     <li>Updates the selected repository-relative file.</li>
     <li>For <code>kubernetesContainerImage</code>, patches the <code>image:</code> field under the named container.</li>
-    <li>For <code>helmImageValues</code>, patches <code>image.repository</code> and <code>image.tag</code> under the top-level <code>image:</code> block.</li>
+    <li>For <code>helmImageTag</code>, patches <code>image.tag</code> under the top-level <code>image:</code> block.</li>
     <li>Commits and pushes the change only when the file actually changed.</li>
     <li>Serializes updates to the same repository and branch with Jenkins Lockable Resources.</li>
     <li>If the remote branch changes before push, fetches, rebases, and retries the push.</li>
@@ -58,8 +57,7 @@ updateGithub(
     <li><code>operation</code>: Update operation. Default: <code>kubernetesContainerImage</code>.</li>
     <li><code>containerName</code>: Required for <code>kubernetesContainerImage</code>.</li>
     <li><code>image</code>: Required for <code>kubernetesContainerImage</code>.</li>
-    <li><code>imageRepository</code>: Required for <code>helmImageValues</code>. Must not contain a tag or digest.</li>
-    <li><code>imageTag</code>: Required for <code>helmImageValues</code>.</li>
+    <li><code>imageTag</code>: Required for <code>helmImageTag</code>.</li>
     <li><code>commitMessage</code>: Optional commit message.</li>
     <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
     <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>

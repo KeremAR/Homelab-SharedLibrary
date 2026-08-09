@@ -12,7 +12,7 @@ import com.company.jenkins.Validation
  *
  * CURRENT OPERATIONS:
  * - kubernetesContainerImage: update the image of a named container
- * - helmImageValues: update image.repository and image.tag in a Helm values file
+ * - helmImageTag: update image.tag in a Helm values file
  *
  * SECURITY:
  * - Requires an HTTPS Git URL so credentials can be injected only for push
@@ -30,8 +30,7 @@ import com.company.jenkins.Validation
  *   - operation: Update operation (default: 'kubernetesContainerImage')
  *   - containerName: REQUIRED for kubernetesContainerImage
  *   - image: REQUIRED for kubernetesContainerImage
- *   - imageRepository: REQUIRED for helmImageValues
- *   - imageTag: REQUIRED for helmImageValues
+ *   - imageTag: REQUIRED for helmImageTag
  *   - commitMessage: Optional commit message
  *   - gitUserName: Commit user name (default: 'Jenkins CI')
  *   - gitUserEmail: Commit user email (default: 'jenkins@ci.local')
@@ -59,13 +58,12 @@ def call(Map config = [:]) {
     String gitUserName = (config.gitUserName ?: 'Jenkins CI').toString()
     String gitUserEmail = emailAddress((config.gitUserEmail ?: 'jenkins@ci.local').toString(), 'gitUserEmail')
 
-    if (!(operation in ['kubernetesContainerImage', 'helmImageValues'])) {
+    if (!(operation in ['kubernetesContainerImage', 'helmImageTag'])) {
         error "Unsupported updateGithub operation: ${operation}"
     }
 
     String containerName = config.containerName ? resourceName(config.containerName.toString(), 'containerName') : ''
     String image = config.image ? imageReference(config.image.toString(), 'image') : ''
-    String imageRepository = config.imageRepository ? validateImageRepository(config.imageRepository.toString(), 'imageRepository') : ''
     String imageTag = config.imageTag ? validateImageTag(config.imageTag.toString(), 'imageTag') : ''
 
     if (operation == 'kubernetesContainerImage') {
@@ -77,16 +75,13 @@ def call(Map config = [:]) {
         }
     }
 
-    if (operation == 'helmImageValues') {
-        if (!imageRepository) {
-            error "updateGithub operation ${operation} requires 'imageRepository'"
-        }
+    if (operation == 'helmImageTag') {
         if (!imageTag) {
             error "updateGithub operation ${operation} requires 'imageTag'"
         }
     }
 
-    String commitMessage = (config.commitMessage ?: defaultCommitMessage(operation, containerName, image, imageRepository, imageTag)).toString()
+    String commitMessage = (config.commitMessage ?: defaultCommitMessage(operation, containerName, image, imageTag)).toString()
     String lockResource = lockResourceName(
         (config.lockResource ?: "github-update-${lockKey(repoAuthPath)}-${lockKey(branch)}").toString()
     )
@@ -123,7 +118,6 @@ def call(Map config = [:]) {
                 "GITHUB_UPDATE_OPERATION=${operation}",
                 "GITHUB_UPDATE_CONTAINER=${containerName}",
                 "GITHUB_UPDATE_IMAGE=${image}",
-                "GITHUB_UPDATE_IMAGE_REPOSITORY=${imageRepository}",
                 "GITHUB_UPDATE_IMAGE_TAG=${imageTag}",
                 "GITHUB_UPDATE_COMMIT_MESSAGE=${commitMessage}",
                 "GITHUB_UPDATE_USER_NAME=${gitUserName}",
@@ -168,7 +162,7 @@ def call(Map config = [:]) {
                                 exit 1
                             }
                         else
-                            awk -v repository="$GITHUB_UPDATE_IMAGE_REPOSITORY" -v tag="$GITHUB_UPDATE_IMAGE_TAG" '
+                            awk -v tag="$GITHUB_UPDATE_IMAGE_TAG" '
                                 /^[[:space:]]*image:[[:space:]]*$/ {
                                     in_image = 1
                                     print
@@ -177,14 +171,6 @@ def call(Map config = [:]) {
 
                                 in_image && /^[^[:space:]#][^:]*:/ {
                                     in_image = 0
-                                }
-
-                                in_image && /^[[:space:]]*repository:[[:space:]]*/ {
-                                    indent = $0
-                                    sub(/repository:.*/, "", indent)
-                                    print indent "repository: " repository
-                                    patched_repository = 1
-                                    next
                                 }
 
                                 in_image && /^[[:space:]]*tag:[[:space:]]*/ {
@@ -198,12 +184,12 @@ def call(Map config = [:]) {
                                 { print }
 
                                 END {
-                                    if (!patched_repository || !patched_tag) {
+                                    if (!patched_tag) {
                                         exit 42
                                     }
                                 }
                             ' "$GITHUB_UPDATE_FILE" > "$GITHUB_UPDATE_FILE.tmp" || {
-                                echo "Could not patch image.repository and image.tag in $GITHUB_UPDATE_FILE" >&2
+                                echo "Could not patch image.tag in $GITHUB_UPDATE_FILE" >&2
                                 exit 1
                             }
                         fi
@@ -269,12 +255,12 @@ private Object required(Map config, String key) {
     return config[key]
 }
 
-private String defaultCommitMessage(String operation, String containerName, String image, String imageRepository, String imageTag) {
+private String defaultCommitMessage(String operation, String containerName, String image, String imageTag) {
     if (operation == 'kubernetesContainerImage') {
         return "ci: update ${containerName} image to ${image}"
     }
 
-    return "ci: update Helm image to ${imageRepository}:${imageTag}"
+    return "ci: update Helm image tag to ${imageTag}"
 }
 
 private int positiveInt(Object value, String label) {
@@ -347,23 +333,6 @@ private String imageReference(String value, String label) {
 
     if (!normalized.contains(':') && !normalized.contains('@')) {
         error "${label} must contain a tag or digest: ${value}"
-    }
-
-    return normalized
-}
-
-private String validateImageRepository(String value, String label) {
-    String normalized = value.trim()
-    if (!normalized || normalized.startsWith('-') || normalized.contains('..')) {
-        error "Invalid ${label}: ${value}"
-    }
-
-    if (!(normalized ==~ /^[A-Za-z0-9._\/-]+$/)) {
-        error "Invalid characters in ${label}: ${value}"
-    }
-
-    if (normalized.contains(':') || normalized.contains('@')) {
-        error "${label} must not contain a tag or digest: ${value}"
     }
 
     return normalized

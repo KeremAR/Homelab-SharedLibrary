@@ -418,8 +418,8 @@ The currently supported operations are:
 kubernetesContainerImage
   updates the image: field for a named container in a Kubernetes manifest
 
-helmImageValues
-  updates image.repository and image.tag in a Helm values file
+helmImageTag
+  updates image.tag in a Helm values file
 ```
 
 This keeps deploy helpers project-specific and keeps `updateGithub()` reusable
@@ -483,7 +483,7 @@ registry push:
 
 ```text
 read image-artifacts/pushed-images.txt
-split the pushed image into repository and tag
+read the pushed image tag
 updateGithub takes a repository/branch lock
 updateGithub updates 6-Helm-Deploy/<service>/values-staging.yaml
   or 6-Helm-Deploy/<service>/values-production.yaml
