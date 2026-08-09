@@ -112,7 +112,7 @@ kubectl apply with a kubeconfig credential.
 The `kubernetes` container uses the custom image:
 
 ```text
-ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-argocd-3.4.2-rollouts-1.9.1
+ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-helm-3.20.1-argocd-3.4.2-rollouts-1.9.1
 ```
 
 It is a lightweight Alpine-based image with `sh`, `kubectl`, `argocd`, and the
@@ -149,6 +149,7 @@ than letting two Docker daemons share the same data directory.
 - `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, serializes repo/branch pushes, and retries rejected pushes with fetch/rebase.
 - `deployWithKubectl(service: '...')` updates manifests and applies them with kubectl.
 - `deployWithArgoKubectl(service: '...')` updates manifests and lets ArgoCD sync them.
+- `deployWithHelm(service: '...')` updates Helm values and optionally runs `helm upgrade --install`.
 - `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
 - `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
 
@@ -408,6 +409,22 @@ image-artifacts/pushed-images.txt
 That file records the source image ref, final registry ref, and archive path
 that were pushed.
 
+`updateGithub()` is intentionally split into a generic Git workflow plus small
+patch operations. The caller decides which repository file should change, while
+`updateGithub()` handles checkout, locking, commit, push, and retry behavior.
+The currently supported operations are:
+
+```text
+kubernetesContainerImage
+  updates the image: field for a named container in a Kubernetes manifest
+
+helmImageValues
+  updates image.repository and image.tag in a Helm values file
+```
+
+This keeps deploy helpers project-specific and keeps `updateGithub()` reusable
+for any repository that needs the same safe Git update flow.
+
 When the release job `DEPLOY` parameter is selected, the current GitOps release
 flow runs `deployWithArgoKubectl()` after the registry push:
 
@@ -460,6 +477,34 @@ application namespace permissions by default.
 The GitOps release flow should prefer `deployWithArgoKubectl()` so Jenkins
 changes Git and ArgoCD performs the cluster update. Keep `deployWithKubectl()`
 for fallback/manual direct apply flows.
+
+If the transitional Helm deploy path is used, `deployWithHelm()` runs after the
+registry push:
+
+```text
+read image-artifacts/pushed-images.txt
+split the pushed image into repository and tag
+updateGithub takes a repository/branch lock
+updateGithub updates 6-Helm-Deploy/<service>/values-staging.yaml
+  or 6-Helm-Deploy/<service>/values-production.yaml
+updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
+write kubeconfig from the Jenkins kubeconfig credential
+helm upgrade --install <namespace>-<service> 6-Helm-Deploy/<service>
+  --namespace <namespace>
+  --values 6-Helm-Deploy/<service>/values-<environment>.yaml
+  --take-ownership
+```
+
+In this Helm flow the deployable desired state is the environment values file,
+not the raw Kubernetes `deployment.yaml` image field. `DEPLOY_ENVIRONMENT=prod`
+maps to namespace `production` and to `values-production.yaml`. The image tag
+itself may still contain the shorter `prod` suffix because that tag is produced
+earlier by `pushToRegistry()`.
+
+`deployWithHelm()` still uses the same explicit kubeconfig credential model as
+`deployWithKubectl()`. The difference is the apply engine: Helm renders the
+chart and manages the release history, while kubectl applies a manifest
+directory directly.
 
 `pushToRegistry()` logs in with Jenkins credentials, pushes the image, then logs
 out and removes `$WORKSPACE/.docker` in a `finally` block. The release

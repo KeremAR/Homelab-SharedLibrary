@@ -6,6 +6,8 @@ Updates a file in a GitHub repository, commits the change, and pushes it back.
 
 <h3>Example</h3>
 
+<h4>Kubernetes manifest image</h4>
+
 <pre>
 updateGithub(
     repoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
@@ -18,12 +20,27 @@ updateGithub(
 )
 </pre>
 
+<h4>Helm values image</h4>
+
+<pre>
+updateGithub(
+    repoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+    branch: 'main',
+    file: '6-Helm-Deploy/user-service/values-staging.yaml',
+    operation: 'helmImageValues',
+    imageRepository: 'ghcr.io/keremar/todo-app-user-service',
+    imageTag: 'abc1234-v1.0-staging',
+    credentialsId: 'github-token'
+)
+</pre>
+
 <h3>Behavior</h3>
 
 <ul>
     <li>Checks out the target GitHub repository into the workspace.</li>
     <li>Updates the selected repository-relative file.</li>
     <li>For <code>kubernetesContainerImage</code>, patches the <code>image:</code> field under the named container.</li>
+    <li>For <code>helmImageValues</code>, patches <code>image.repository</code> and <code>image.tag</code> under the top-level <code>image:</code> block.</li>
     <li>Commits and pushes the change only when the file actually changed.</li>
     <li>Serializes updates to the same repository and branch with Jenkins Lockable Resources.</li>
     <li>If the remote branch changes before push, fetches, rebases, and retries the push.</li>
@@ -41,9 +58,19 @@ updateGithub(
     <li><code>operation</code>: Update operation. Default: <code>kubernetesContainerImage</code>.</li>
     <li><code>containerName</code>: Required for <code>kubernetesContainerImage</code>.</li>
     <li><code>image</code>: Required for <code>kubernetesContainerImage</code>.</li>
+    <li><code>imageRepository</code>: Required for <code>helmImageValues</code>. Must not contain a tag or digest.</li>
+    <li><code>imageTag</code>: Required for <code>helmImageValues</code>.</li>
     <li><code>commitMessage</code>: Optional commit message.</li>
     <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
     <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>
     <li><code>lockResource</code>: Optional explicit lock name. Default is generated from repository and branch.</li>
     <li><code>maxPushRetries</code>: Push attempts after fetch/rebase. Default: <code>3</code>.</li>
 </ul>
+
+<h3>Operation Model</h3>
+
+<p>
+The helper stays project-agnostic by keeping Git operations separate from file
+patch operations. Project-specific deploy helpers decide which file should be
+updated, then pass one explicit operation to <code>updateGithub</code>.
+</p>

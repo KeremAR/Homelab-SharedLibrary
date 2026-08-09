@@ -61,7 +61,7 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
           drop:
             - ALL
     - name: kubernetes
-      image: ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-argocd-3.4.2-rollouts-1.9.1
+      image: ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-helm-3.20.1-argocd-3.4.2-rollouts-1.9.1
       imagePullPolicy: IfNotPresent
       command: ["sleep"]
       args: ["infinity"]
