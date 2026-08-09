@@ -98,12 +98,23 @@ The release pod is intentionally smaller:
 jnlp
 docker
 docker-dind
+kubernetes
 ```
 
 Release jobs do not run Python linting, Node linting, unit tests, SonarQube,
 Hadolint, or Trivy. They only copy or build a Docker archive, load it into the
 pod-local Docker daemon, retag it, push it to the registry, and optionally run
 kubectl apply with a kubeconfig credential.
+
+The `kubernetes` container uses the custom image:
+
+```text
+ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-argocd-3.4.2-rollouts-1.9.1
+```
+
+It includes shell utilities, `kubectl`, `argocd`, and the Argo Rollouts kubectl
+plugin. Deployment helpers use `container('kubernetes')`, so this one container
+can cover kubectl deploys and future ArgoCD release steps.
 
 Even production releases need Docker graph storage because `docker load` writes
 the archived image layers into the Docker daemon before `docker tag` and

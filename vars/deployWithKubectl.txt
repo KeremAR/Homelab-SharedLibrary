@@ -44,7 +44,7 @@ deployWithKubectl(
     <li><code>kubeconfigIsBase64</code>: Whether the kubeconfig credential is base64 encoded. Default: <code>true</code>.</li>
     <li><code>namespace</code>: Kubernetes namespace override. By default, <code>prod</code> maps to <code>production</code>.</li>
     <li><code>containerName</code>: Container name in the Kubernetes manifest. Default: service name.</li>
-    <li><code>kubectlContainer</code>: Jenkins Kubernetes container name. Default: <code>kubectl</code>.</li>
+    <li><code>kubectlContainer</code>: Jenkins Kubernetes container name. Default: <code>kubernetes</code>.</li>
     <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
     <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>
 </ul>

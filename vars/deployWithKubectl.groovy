@@ -35,7 +35,7 @@ import com.company.jenkins.Validation
  *   - kubeconfigIsBase64: Whether the credential is base64 encoded (default: true)
  *   - namespace: Kubernetes namespace override
  *   - containerName: Container name inside Kubernetes manifest (default: service)
- *   - kubectlContainer: Jenkins Kubernetes container name (default: 'kubectl')
+ *   - kubectlContainer: Jenkins Kubernetes container name (default: 'kubernetes')
  *   - gitUserName: Commit user name (default: 'Jenkins CI')
  *   - gitUserEmail: Commit user email (default: 'jenkins@ci.local')
  *
@@ -60,7 +60,7 @@ def call(Map config = [:]) {
     String credentialsId = (config.credentialsId ?: 'github-token').toString()
     String kubeconfigCredentialsId = (config.kubeconfigCredentialsId ?: 'kubeconfig').toString()
     boolean kubeconfigIsBase64 = config.get('kubeconfigIsBase64', true)
-    String kubectlContainer = (config.kubectlContainer ?: 'kubectl').toString()
+    String kubectlContainer = (config.kubectlContainer ?: 'kubernetes').toString()
     String gitUserName = (config.gitUserName ?: 'Jenkins CI').toString()
     String gitUserEmail = emailAddress((config.gitUserEmail ?: 'jenkins@ci.local').toString(), 'gitUserEmail')
 

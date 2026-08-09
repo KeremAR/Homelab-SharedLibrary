@@ -58,8 +58,8 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
         capabilities:
           drop:
             - ALL
-    - name: kubectl
-      image: bitnami/kubectl:1.36.1
+    - name: kubernetes
+      image: ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-argocd-3.4.2-rollouts-1.9.1
       imagePullPolicy: IfNotPresent
       command: ["sleep"]
       args: ["infinity"]

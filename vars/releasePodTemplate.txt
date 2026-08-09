@@ -7,9 +7,10 @@ Returns the minimal Kubernetes pod template used by manual release pipelines.
 <h3>Behavior</h3>
 
 <ul>
-    <li>Includes only <code>jnlp</code>, <code>docker</code>, <code>docker-dind</code>, and <code>kubectl</code>.</li>
+    <li>Includes only <code>jnlp</code>, <code>docker</code>, <code>docker-dind</code>, and <code>kubernetes</code>.</li>
     <li>Mounts the configured Docker cache PVC at <code>/var/lib/docker</code>.</li>
     <li>Falls back to an <code>emptyDir</code> Docker graph volume when no PVC is provided.</li>
+    <li>Uses the custom <code>ghcr.io/keremar/kubernetes-tools</code> image for kubectl, ArgoCD CLI, and Argo Rollouts CLI.</li>
     <li>Keeps service account token mounting disabled. Deploy helpers use a Jenkins kubeconfig credential for <code>kubectl</code>.</li>
 </ul>
 

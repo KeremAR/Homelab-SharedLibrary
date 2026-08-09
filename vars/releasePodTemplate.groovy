@@ -2,9 +2,11 @@
  * Return the minimal Kubernetes pod template used by manual release pipelines.
  *
  * Release jobs need Jenkins remoting, Docker CLI/DinD for docker load, tag,
- * push, and optional fallback builds, plus kubectl for optional deploys. The
- * pod does not mount a Kubernetes service account token; deploy helpers write
- * a kubeconfig from Jenkins credentials when kubectl is needed. Lint, test,
+ * push, and optional fallback builds, plus Kubernetes tooling for optional
+ * deploys. The kubernetes container uses the custom kubernetes-tools image,
+ * which includes kubectl, the ArgoCD CLI, and Argo Rollouts plugin. The pod
+ * does not mount a Kubernetes service account token; deploy helpers write a
+ * kubeconfig from Jenkins credentials when kubectl is needed. Lint, test,
  * SonarQube, Hadolint, and Trivy containers intentionally stay out of this pod.
  *
  * @param config Map containing:
