@@ -58,6 +58,24 @@ __DOCKER_GRAPH_STORAGE_VOLUME__
         capabilities:
           drop:
             - ALL
+    - name: kubectl
+      image: bitnami/kubectl:1.36.1
+      imagePullPolicy: IfNotPresent
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "50m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
     - name: docker-dind
       image: docker:29-dind
       imagePullPolicy: IfNotPresent

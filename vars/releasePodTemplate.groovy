@@ -1,9 +1,11 @@
 /**
  * Return the minimal Kubernetes pod template used by manual release pipelines.
  *
- * Release jobs only need Jenkins remoting plus Docker CLI/DinD for docker load,
- * tag, push, and optional fallback builds. Lint, test, SonarQube, Hadolint, and
- * Trivy containers intentionally stay out of this pod.
+ * Release jobs need Jenkins remoting, Docker CLI/DinD for docker load, tag,
+ * push, and optional fallback builds, plus kubectl for optional deploys. The
+ * pod does not mount a Kubernetes service account token; deploy helpers write
+ * a kubeconfig from Jenkins credentials when kubectl is needed. Lint, test,
+ * SonarQube, Hadolint, and Trivy containers intentionally stay out of this pod.
  *
  * @param config Map containing:
  *   - dockerCachePvc: Optional PVC mounted as docker-dind /var/lib/docker.

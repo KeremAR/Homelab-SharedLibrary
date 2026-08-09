@@ -35,13 +35,16 @@ pipeline {
 
                     validateBranchForService(env.SELECTED_BRANCH_NORMALIZED, service)
                     boolean useCiArtifact = useCiArtifactParam()
+                    boolean deployEnabled = deployParam()
                     validateReleaseMode(params.DEPLOY_ENVIRONMENT, useCiArtifact)
-                    setBuildSummary(service, params.DEPLOY_ENVIRONMENT, env.SELECTED_BRANCH_NORMALIZED, useCiArtifact)
+                    setBuildSummary(service, params.DEPLOY_ENVIRONMENT, env.SELECTED_BRANCH_NORMALIZED, useCiArtifact, deployEnabled)
 
                     echo "Release job service: ${service.name}"
                     echo "Selected branch: ${env.SELECTED_BRANCH_NORMALIZED}"
                     echo "Release branch mode: ${env.IS_RELEASE_BRANCH}"
                     echo "Selected branch CI job: ${env.CI_JOB_FULL_NAME}"
+                    echo "Deploy enabled: ${deployEnabled}"
+                    env.DEPLOY_ENABLED = deployEnabled.toString()
 
                     if (useCiArtifact) {
                         env.USE_CI_ARTIFACTS = 'true'
@@ -145,6 +148,27 @@ pipeline {
                 )
             }
         }
+
+        stage('Deploy with Kubectl') {
+            when {
+                expression { env.DEPLOY_ENABLED == 'true' }
+            }
+            steps {
+                script {
+                    Map service = releaseServiceConfig()
+                    deployWithKubectl(
+                        service: service.name,
+                        environment: params.DEPLOY_ENVIRONMENT,
+                        pushedManifest: 'image-artifacts/pushed-images.txt',
+                        configRepoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+                        configRepoBranch: 'main',
+                        manifestsRoot: '3-Kubectl-Deploy',
+                        credentialsId: 'github-token',
+                        kubeconfigCredentialsId: 'kubeconfig'
+                    )
+                }
+            }
+        }
     }
 
     post {
@@ -184,11 +208,19 @@ private boolean useCiArtifactParam() {
     return true
 }
 
-private void setBuildSummary(Map service, String deployEnvironment, String branch, boolean useCiArtifact) {
+private boolean deployParam() {
+    if (params.containsKey('DEPLOY')) {
+        return params.DEPLOY as boolean
+    }
+
+    return true
+}
+
+private void setBuildSummary(Map service, String deployEnvironment, String branch, boolean useCiArtifact, boolean deployEnabled) {
     String user = env.BUILD_USER ?: env.BUILD_USER_ID ?: 'unknown'
     String artifactMode = useCiArtifact ? 'ci-artifact' : 'self-build'
 
-    currentBuild.description = "User: ${user} / env: ${deployEnvironment} / branch: ${branch} / mode: ${artifactMode}"
+    currentBuild.description = "User: ${user} / env: ${deployEnvironment} / deploy: ${deployEnabled} / branch: ${branch} / service: ${service.name} / mode: ${artifactMode}"
 }
 
 private Map releaseServiceConfig() {

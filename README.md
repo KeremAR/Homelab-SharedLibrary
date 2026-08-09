@@ -23,7 +23,7 @@ SonarQube, and image build stages:
 - `jenkins-sonar-cache-pvc` mounted at `/home/jenkins/.sonar`
 - service-specific Docker cache PVCs mounted at `/var/lib/docker` in the `docker-dind` sidecar on release branches
 - `ghcr-creds` image pull secret
-- `automountServiceAccountToken: false`
+- CI and release pods use `automountServiceAccountToken: false`; release deploys use a Jenkins kubeconfig credential
 - non-root container execution
 - dropped Linux capabilities
 - `RuntimeDefault` seccomp profile
@@ -102,7 +102,8 @@ docker-dind
 
 Release jobs do not run Python linting, Node linting, unit tests, SonarQube,
 Hadolint, or Trivy. They only copy or build a Docker archive, load it into the
-pod-local Docker daemon, retag it, and push it to the registry.
+pod-local Docker daemon, retag it, push it to the registry, and optionally run
+kubectl apply with a kubeconfig credential.
 
 Even production releases need Docker graph storage because `docker load` writes
 the archived image layers into the Docker daemon before `docker tag` and
@@ -129,6 +130,8 @@ than letting two Docker daemons share the same data directory.
 - `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
 - `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
 - `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
+- `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, and pushes it back.
+- `deployWithKubectl(service: '...')` applies Kubernetes manifests with the pushed registry image.
 - `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
 - `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
 
@@ -387,6 +390,29 @@ image-artifacts/pushed-images.txt
 
 That file records the source image ref, final registry ref, and archive path
 that were pushed.
+
+When the release job `DEPLOY` parameter is selected, `deployWithKubectl()` runs
+after the registry push:
+
+```text
+read image-artifacts/pushed-images.txt
+updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
+write kubeconfig from the Jenkins kubeconfig credential
+kubectl apply -f 3-Kubectl-Deploy/<environment>/<service>/templates
+```
+
+The helper uses the `kubectl` container from `releasePodTemplate()`. It maps
+`DEPLOY_ENVIRONMENT=prod` to the Kubernetes namespace and manifest folder
+`production`, while the image tag keeps the shorter `prod` suffix.
+
+The release pod does not mount its Kubernetes ServiceAccount token. Deploy
+permission comes from the Jenkins Secret Text credential named `kubeconfig`.
+In this setup that credential stores a base64 encoded kubeconfig from
+`KUBECONFIG_B64`. Base64 is used because the kubeconfig moves through `.env`,
+`envsubst`, a Kubernetes Secret, Jenkins env, and JCasC as one line. It is not a
+Kubernetes `stringData` requirement. This keeps deploy authorization explicit
+and avoids giving the Jenkins pod ServiceAccount application namespace
+permissions by default.
 
 `pushToRegistry()` logs in with Jenkins credentials, pushes the image, then logs
 out and removes `$WORKSPACE/.docker` in a `finally` block. The release

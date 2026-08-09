@@ -1,0 +1,45 @@
+<h2>updateGithub</h2>
+
+<p>
+Updates a file in a GitHub repository, commits the change, and pushes it back.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+updateGithub(
+    repoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+    branch: 'main',
+    file: '3-Kubectl-Deploy/staging/user-service/templates/deployment.yaml',
+    operation: 'kubernetesContainerImage',
+    containerName: 'user-service',
+    image: 'ghcr.io/keremar/todo-app-user-service:abc1234-v1.0-staging',
+    credentialsId: 'github-token'
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Checks out the target GitHub repository into the workspace.</li>
+    <li>Updates the selected repository-relative file.</li>
+    <li>For <code>kubernetesContainerImage</code>, patches the <code>image:</code> field under the named container.</li>
+    <li>Commits and pushes the change only when the file actually changed.</li>
+    <li>Restores the clean remote URL after pushing so tokenized remotes are not left behind.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>repoUrl</code>: Required HTTPS Git repository URL.</li>
+    <li><code>branch</code>: Branch to update. Default: <code>main</code>.</li>
+    <li><code>checkoutDir</code>: Workspace checkout directory. Default: <code>github-update</code>.</li>
+    <li><code>credentialsId</code>: Jenkins username/password credential id. Default: <code>github-token</code>.</li>
+    <li><code>file</code>: Required repository-relative file path.</li>
+    <li><code>operation</code>: Update operation. Default: <code>kubernetesContainerImage</code>.</li>
+    <li><code>containerName</code>: Required for <code>kubernetesContainerImage</code>.</li>
+    <li><code>image</code>: Required for <code>kubernetesContainerImage</code>.</li>
+    <li><code>commitMessage</code>: Optional commit message.</li>
+    <li><code>gitUserName</code>: Commit user name. Default: <code>Jenkins CI</code>.</li>
+    <li><code>gitUserEmail</code>: Commit user email. Default: <code>jenkins@ci.local</code>.</li>
+</ul>
