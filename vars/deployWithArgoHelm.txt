@@ -1,0 +1,41 @@
+<h2>deployWithArgoHelm</h2>
+
+<p>
+Updates a service Helm values file in GitHub and lets ArgoCD deploy it.
+</p>
+
+<h3>Example</h3>
+
+<pre>
+deployWithArgoHelm(
+    service: 'todo-service',
+    environment: 'staging',
+    pushedManifest: 'image-artifacts/pushed-images.txt',
+    configRepoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+    helmRoot: '6-Helm-Deploy',
+    credentialsId: 'github-token'
+)
+</pre>
+
+<h3>Behavior</h3>
+
+<ul>
+    <li>Reads the pushed registry image for the selected service.</li>
+    <li>Extracts the image tag from the pushed image reference.</li>
+    <li>Updates <code>image.tag</code> in <code>values-staging.yaml</code> or <code>values-production.yaml</code>.</li>
+    <li>Does not run <code>helm upgrade</code>.</li>
+    <li>Does not run <code>kubectl apply</code>.</li>
+    <li>Relies on ArgoCD automated sync to render the Helm chart and update the cluster.</li>
+</ul>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code>service</code>: Required service name.</li>
+    <li><code>environment</code>: Required target environment: <code>staging</code>, <code>prod</code>, or <code>production</code>.</li>
+    <li><code>pushedManifest</code>: Path to <code>pushed-images.txt</code>. Default: <code>image-artifacts/pushed-images.txt</code>.</li>
+    <li><code>configRepoUrl</code>: Required GitHub repository URL containing the Helm charts.</li>
+    <li><code>configRepoBranch</code>: Config repository branch. Default: <code>main</code>.</li>
+    <li><code>helmRoot</code>: Helm chart root inside the config repository. Default: <code>6-Helm-Deploy</code>.</li>
+    <li><code>argoApplication</code>: Optional ArgoCD Application name used only for log messages.</li>
+</ul>

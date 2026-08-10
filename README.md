@@ -150,6 +150,7 @@ than letting two Docker daemons share the same data directory.
 - `deployWithKubectl(service: '...')` updates manifests and applies them with kubectl.
 - `deployWithArgoKubectl(service: '...')` updates manifests and lets ArgoCD sync them.
 - `deployWithHelm(service: '...')` updates Helm values and optionally runs `helm upgrade --install`.
+- `deployWithArgoHelm(service: '...')` updates Helm values and lets ArgoCD sync the Helm Application.
 - `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
 - `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
 
@@ -425,22 +426,25 @@ helmImageTag
 This keeps deploy helpers project-specific and keeps `updateGithub()` reusable
 for any repository that needs the same safe Git update flow.
 
-When the release job `DEPLOY` parameter is selected, the current GitOps release
-flow runs `deployWithArgoKubectl()` after the registry push:
+When the release job `DEPLOY` parameter is selected, the final GitOps + Helm
+release flow runs `deployWithArgoHelm()` after the registry push:
 
 ```text
 read image-artifacts/pushed-images.txt
+read the pushed image tag
 updateGithub takes a repository/branch lock
-updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
+updateGithub updates 6-Helm-Deploy/<service>/values-staging.yaml
+  or 6-Helm-Deploy/<service>/values-production.yaml
 updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
 ArgoCD detects the Git change
-ArgoCD syncs the matching Application
+ArgoCD renders the Helm chart
+ArgoCD syncs the matching Application into the cluster
 ```
 
-The GitOps helper does not need a kubeconfig and does not run
-`kubectl apply`. It maps `DEPLOY_ENVIRONMENT=prod` to the Kubernetes namespace
-and manifest folder `production`, while the image tag keeps the shorter `prod`
-suffix.
+The ArgoCD Helm helper does not need a kubeconfig and does not run
+`helm upgrade` or `kubectl apply`. It maps `DEPLOY_ENVIRONMENT=prod` to
+`values-production.yaml`, while the image tag may still keep the shorter `prod`
+suffix because that tag is produced earlier by `pushToRegistry()`.
 
 The lock matters when two release pipelines update the same config repository
 branch at the same time. Without it, both jobs can checkout the same old
@@ -474,9 +478,20 @@ one line. It is not a Kubernetes `stringData` requirement. This keeps deploy
 authorization explicit and avoids giving the Jenkins pod ServiceAccount
 application namespace permissions by default.
 
-The GitOps release flow should prefer `deployWithArgoKubectl()` so Jenkins
-changes Git and ArgoCD performs the cluster update. Keep `deployWithKubectl()`
-for fallback/manual direct apply flows.
+If the raw-manifest GitOps path is used instead, `deployWithArgoKubectl()`
+runs after the registry push:
+
+```text
+read image-artifacts/pushed-images.txt
+updateGithub takes a repository/branch lock
+updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
+updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
+ArgoCD detects the Git change
+ArgoCD syncs the matching Application
+```
+
+Keep `deployWithArgoKubectl()` for the pre-Helm GitOps phase where ArgoCD
+tracks plain Kubernetes manifests.
 
 If the transitional Helm deploy path is used, `deployWithHelm()` runs after the
 registry push:
