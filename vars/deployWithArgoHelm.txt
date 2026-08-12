@@ -37,5 +37,5 @@ deployWithArgoHelm(
     <li><code>configRepoUrl</code>: Required GitHub repository URL containing the Helm charts.</li>
     <li><code>configRepoBranch</code>: Config repository branch. Default: <code>main</code>.</li>
     <li><code>helmRoot</code>: Helm chart root inside the config repository. Default: <code>6-Helm-Deploy</code>.</li>
-    <li><code>argoApplication</code>: Optional ArgoCD Application name used only for log messages.</li>
+    <li><code>argoApplication</code>: Optional ArgoCD Application name used only for log messages. Default: <code>helm-&lt;namespace&gt;-&lt;service&gt;</code>.</li>
 </ul>

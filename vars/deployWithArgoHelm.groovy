@@ -59,7 +59,7 @@ def call(Map config = [:]) {
     String credentialsId = (config.credentialsId ?: 'github-token').toString()
     String gitUserName = (config.gitUserName ?: 'Jenkins CI').toString()
     String gitUserEmail = emailAddress((config.gitUserEmail ?: 'jenkins@ci.local').toString(), 'gitUserEmail')
-    String argoApplication = config.argoApplication ? resourceName(config.argoApplication.toString(), 'argoApplication') : "${namespace}-${service}"
+    String argoApplication = config.argoApplication ? resourceName(config.argoApplication.toString(), 'argoApplication') : "helm-${namespace}-${service}"
 
     if (!fileExists(pushedManifest)) {
         error "Pushed image manifest does not exist: ${pushedManifest}. Run pushToRegistry before deployWithArgoHelm."
