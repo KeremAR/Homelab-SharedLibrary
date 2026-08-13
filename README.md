@@ -1,98 +1,210 @@
 # Homelab-SharedLibrary
 
-Reusable Jenkins Pipeline helpers for the Homelab CI/CD setup.
+Reusable Jenkins Shared Library for the Homelab CI/CD setup.
 
-## CI Pod Template
+This repository owns the reusable Pipeline steps, Kubernetes agent pod
+templates, validation classes, and manual release Jenkinsfile used by Jenkins.
+Jenkins itself is installed and configured elsewhere:
 
-Use `ciLintPodTemplate()` from Jenkinsfiles to run CI steps on a Kubernetes
-agent. The name stayed as `ciLintPodTemplate` because this started as the lint
-agent, but it now contains the shared CI containers used by lint, test, scan,
-SonarQube, and image build stages:
+```text
+4-Jenkins-Setup/4A-Jenkins.md
+4-Jenkins-Setup/4B-Jenkins-Install.md
+```
 
-- `python` container for linting and unit tests
-- `node` container for frontend linting
-- `sonar` container with Java runtime for SonarQube scanner execution
-- `hadolint` container for Dockerfile linting
-- `docker` container for Docker CLI commands
-- `docker-dind` sidecar for Docker-in-Docker image builds
-- `trivy` container for security scans
-- `jenkins-tools-cache-pvc` mounted at `/home/jenkins/agent/tools` for Jenkins tool installers
-- `jenkins-venv-cache-pvc` mounted at `/cache/pip` for pip downloads/wheels
-- `jenkins-npm-cache-pvc` mounted at `/home/node/.npm`
-- `jenkins-trivy-cache-pvc` mounted at `/home/jenkins/.cache/trivy`
-- `jenkins-sonar-cache-pvc` mounted at `/home/jenkins/.sonar`
-- service-specific Docker cache PVCs mounted at `/var/lib/docker` in the `docker-dind` sidecar on release branches
-- `ghcr-creds` image pull secret
-- CI and release pods use `automountServiceAccountToken: false`; release deploys use a Jenkins kubeconfig credential
-- non-root container execution
-- dropped Linux capabilities
-- `RuntimeDefault` seccomp profile
+Read this file from top to bottom if you are new to the project. It starts with
+the Jenkins assumptions, then explains the CI flow, then the release flow, and
+finally the shared validation and artifact contracts.
 
-The pod YAML lives in:
+---
+
+## 1. Repository Layout
+
+```text
+SharedLibrary/
+  vars/
+    *.groovy  -> global Jenkins Pipeline steps
+    *.txt     -> Jenkins Global Variable Reference help pages
+
+  src/com/company/jenkins/
+    *.groovy  -> reusable helper classes and validators
+
+  resources/com/company/jenkins/pods/
+    lint-pod.yaml
+    release-pod.yaml
+
+  pipelines/release/
+    Jenkinsfile
+```
+
+Files under `vars/` become callable Jenkins steps:
+
+```groovy
+runPythonLinting(...)
+runUnitTest(...)
+pushToRegistry(...)
+```
+
+Files under `src/` are regular Groovy classes used by those steps:
+
+```groovy
+com.company.jenkins.Validation
+com.company.jenkins.TrivyValidation
+com.company.jenkins.ReleaseResolver
+com.company.jenkins.ImageArtifactManifest
+```
+
+Files under `resources/` are loaded with `libraryResource(...)`, mainly for
+Kubernetes agent pod YAML.
+
+---
+
+## 2. Jenkins Assumptions
+
+Jenkins registers this repo as a global shared library named:
+
+```text
+homelab-shared-library
+```
+
+Application Jenkinsfiles use it with:
+
+```groovy
+@Library('homelab-shared-library') _
+```
+
+The current Jenkins setup provides:
+
+```text
+Kubernetes plugin
+GitHub Branch Source plugin
+Job DSL plugin
+SonarQube plugin
+Dependency-Track plugin
+Copy Artifact plugin
+Lockable Resources plugin
+Credentials Binding plugin
+Build User Vars plugin
+```
+
+Important Jenkins credentials:
+
+```text
+github-token
+sonarqube-token
+dependency-track-api-key
+kubeconfig
+```
+
+Important Kubernetes imagePullSecret:
+
+```text
+ghcr-creds
+```
+
+`github-token` is used for Git checkout, GitHub updates, and GHCR push.
+`ghcr-creds` is used by Kubernetes when pulling private agent images from GHCR.
+
+---
+
+## 3. Agent Pods
+
+The library provides two Kubernetes agent pod templates.
+
+### CI Agent
+
+Helper:
+
+```groovy
+ciLintPodTemplate(...)
+```
+
+Resource:
 
 ```text
 resources/com/company/jenkins/pods/lint-pod.yaml
 ```
 
-Example:
+Despite the name, this is the main CI pod. It started as a lint pod and later
+grew to host tests, SonarQube, Trivy, and release-branch image builds.
+
+Containers:
+
+```text
+jnlp
+  Jenkins remoting container. Unqualified Jenkins steps run here by default.
+
+python
+  Python linting and unit tests.
+
+node
+  frontend linting.
+
+sonar
+  SonarScanner runtime. Uses a JRE image because the scanner is Java based.
+
+hadolint
+  Dockerfile linting.
+
+trivy
+  dependency, secret, image, and SBOM scans.
+
+docker
+  Docker CLI.
+
+docker-dind
+  pod-local Docker daemon for Docker image builds and docker save.
+```
+
+Main cache mounts:
+
+```text
+jenkins-tools-cache-pvc  -> /home/jenkins/agent/tools
+jenkins-venv-cache-pvc   -> /cache/pip
+jenkins-npm-cache-pvc    -> /home/node/.npm
+jenkins-trivy-cache-pvc  -> /home/jenkins/.cache/trivy
+jenkins-sonar-cache-pvc  -> /home/jenkins/.sonar
+```
+
+Docker cache storage is selected by `ciLintPodTemplate(...)`:
+
+```text
+release/user-service-v1.0.0 -> jenkins-docker-cache-user-service-pvc
+release/todo-service-v1.0.0 -> jenkins-docker-cache-todo-service-pvc
+release/frontend-v1.0       -> jenkins-docker-cache-frontend-pvc
+non-release branches        -> emptyDir
+```
+
+The service-specific Docker cache PVCs use `ReadWriteOncePod`. This prevents two
+Docker daemons from mounting the same `/var/lib/docker` cache at the same time.
+
+Security choices:
+
+```text
+automountServiceAccountToken: false
+non-root containers where possible
+dropped Linux capabilities where possible
+RuntimeDefault seccomp profile
+privileged only for docker-dind
+no host Docker socket mount
+```
+
+### Release Agent
+
+Helper:
 
 ```groovy
-@Library('homelab-shared-library') _
-
-pipeline {
-  agent {
-    kubernetes {
-      yaml ciLintPodTemplate(images: imageBuildConfig.images)
-      defaultContainer 'jnlp'
-    }
-  }
-
-  stages {
-    stage('Check') {
-      steps {
-        sh 'python --version'
-      }
-    }
-  }
-}
+releasePodTemplate(...)
 ```
 
-`defaultContainer 'jnlp'` means unqualified Jenkins steps run in the Jenkins
-agent container by default. Lint helpers still run in their own containers
-because they explicitly call `container('python')`, `container('node')`, or
-`container('hadolint')`. SonarQube analysis should pass `container: 'sonar'`.
-The `sonar` container uses a JRE image because SonarScanner CLI is a Java
-program. This keeps the scanner and embedded JavaScript analyzer out of the
-Jenkins `jnlp` remoting container, so scanner memory pressure is less likely to
-kill the Jenkins agent connection.
-
-Jenkins auto-installed tools, such as SonarQube Scanner, are cached under:
+Resource:
 
 ```text
-/home/jenkins/agent/tools
+resources/com/company/jenkins/pods/release-pod.yaml
 ```
 
-That path is backed by `jenkins-tools-cache-pvc`, so tool downloads can survive
-new ephemeral Kubernetes agent pods. The PVC is ReadWriteOnce like the other CI
-caches, so it assumes the current single-app CI flow with concurrent builds
-disabled.
+The release pod is smaller than the CI pod.
 
-SonarScanner also downloads analyzer and plugin cache files under
-`SONAR_USER_HOME`. The `sonar` container sets:
-
-```text
-HOME=/home/jenkins
-SONAR_USER_HOME=/home/jenkins/.sonar
-```
-
-That directory is backed by `jenkins-sonar-cache-pvc`, separate from the Jenkins
-tool cache. The tool cache stores the scanner binary; the Sonar cache stores
-scanner analyzer files reused by later builds.
-
-## Release Pod Template
-
-Manual release jobs use `releasePodTemplate()` instead of `ciLintPodTemplate()`.
-The release pod is intentionally smaller:
+Containers:
 
 ```text
 jnlp
@@ -101,526 +213,172 @@ docker-dind
 kubernetes
 ```
 
-It also uses the `ghcr-creds` image pull secret because the custom Kubernetes
-tools image is stored in GHCR.
+`docker` and `docker-dind` are used for:
 
-Release jobs do not run Python linting, Node linting, unit tests, SonarQube,
-Hadolint, or Trivy. They only copy or build a Docker archive, load it into the
-pod-local Docker daemon, retag it, push it to the registry, and optionally run
-kubectl apply with a kubeconfig credential.
+```text
+docker load
+docker tag
+docker login
+docker push
+fallback docker build
+```
 
-The `kubernetes` container uses the custom image:
+`kubernetes` uses:
 
 ```text
 ghcr.io/keremar/kubernetes-tools:kubectl-1.36.1-helm-3.20.1-argocd-3.4.2-rollouts-1.9.1
 ```
 
-It is a lightweight Alpine-based image with `sh`, `kubectl`, `argocd`, and the
-Argo Rollouts kubectl plugin. Deployment helpers use `container('kubernetes')`,
-so this one container can cover kubectl deploys and future ArgoCD release
-steps. Git and Docker stay in the `jnlp` and `docker` containers instead of this
-image.
+That image contains `sh`, `kubectl`, `helm`, `argocd`, and `kubectl argo
+rollouts`. The current preferred deploy helper is `deployWithArgoHelm()`, which
+updates Git and lets ArgoCD sync, so it normally does not need to run kubectl or
+helm directly. The container remains available for transitional direct
+deployment helpers.
 
-Even production releases need Docker graph storage because `docker load` writes
-the archived image layers into the Docker daemon before `docker tag` and
-`docker push` run. In the current setup the release pod still mounts the
-service-specific Docker cache PVC at `/var/lib/docker`, so release fallback
-builds can reuse cache. If a CI job and release job for the same service run at
-the same time, `ReadWriteOncePod` can make one pod wait for the cache PVC rather
-than letting two Docker daemons share the same data directory.
+---
 
-## Helper Overview
+## 4. Helper Overview
 
-- `runPythonLinting(targets: [...])` runs Python formatting and lint checks.
-- `runNodeLinting(packageDirs: [...])` runs frontend dependency install and lint checks.
-- `runHadolint(dockerfiles: [...])` runs Dockerfile lint checks.
-- `runUnitTest(services: [...])` runs pytest with JUnit and coverage XML reports.
-- `runSonarQube(projectKey: '...', coverageReports: [...])` runs SonarQube analysis and waits for the Quality Gate.
-- `ensureTrivyDB()` prepares the shared Trivy vulnerability database cache.
-- `runTrivyFSScan(targets: [...])` scans application files and dependency lock files.
-- `runTrivySecretScan(targets: [...])` scans repository content for secrets.
-- `runTrivyIaCscan(targets: [...])` scans Kubernetes, Terraform, Compose, and other IaC files when the repository owns infrastructure manifests.
-- `runTrivyScan(imageManifest: '...')` scans built Docker image archives.
-- `runTrivySBOM(imageManifest: '...')` generates SBOMs from built Docker image archives.
-- `uploadSBOMsToDependencyTrack(sboms: [...])` uploads SBOMs to Dependency-Track.
-- `runBuildImages(images: [...])` builds Dockerfiles with Docker-in-Docker and exports Docker image tar archives.
-- `runReleaseImages(images: [...])` parses release branches, selects the matching image, tags it, and calls `runBuildImages`.
-- `pushToRegistry(imageManifest: '...')` loads archived Docker image tar files and pushes them to a registry.
-- `updateGithub(repoUrl: '...', file: '...')` updates a file in a GitHub repository, commits it, serializes repo/branch pushes, and retries rejected pushes with fetch/rebase.
-- `deployWithKubectl(service: '...')` updates manifests and applies them with kubectl.
-- `deployWithArgoKubectl(service: '...')` updates manifests and lets ArgoCD sync them.
-- `deployWithHelm(service: '...')` updates Helm values and optionally runs `helm upgrade --install`.
-- `deployWithArgoHelm(service: '...')` updates Helm values and lets ArgoCD sync the Helm Application.
-- `releasePodTemplate(dockerCachePvc: '...')` creates the small Kubernetes agent pod for manual release jobs.
-- `markReleaseCiArtifact(outputDir: '...')` writes the release CI success marker after all release CI checks pass.
+CI helpers:
 
-## Lint Helpers
+```text
+runPythonLinting
+  Runs Black and Flake8 for Python services.
 
-- `runPythonLinting(targets: [...])` runs `black --check .` and `flake8 .`.
-- `runNodeLinting(packageDirs: [...])` runs `npm ci --prefer-offline --no-audit` and `npm run lint`.
-- `runHadolint(dockerfiles: [...])` runs Hadolint without Docker-in-Docker.
+runNodeLinting
+  Runs npm ci and npm run lint for frontend packages.
 
-Set `failFast: false` on lint helpers when you want one build to report as
-many lint errors as possible instead of stopping sibling branches early.
+runHadolint
+  Runs Hadolint against Dockerfiles.
 
-Project-specific lint policy should live in the application repository:
+runUnitTest
+  Runs pytest, publishes JUnit, archives coverage XML.
 
-- `pyproject.toml` for Black
-- `.flake8` for Flake8
-- `.hadolint.yaml` for Hadolint
-- `package.json` for frontend lint scripts
+runSonarQube
+  Runs SonarScanner, waits for Quality Gate, optionally fetches issue summary.
 
-## Image Build Flow
+ensureTrivyDB
+  Prepares the shared Trivy vulnerability DB cache.
 
-Image builds are split into two helpers:
+runTrivyFSScan
+  Scans source/dependency files such as package-lock and requirements files.
+
+runTrivySecretScan
+  Scans repository files for committed secrets.
+
+runTrivyIaCscan
+  Scans IaC files when a repository owns manifests, Helm charts, or Terraform.
+```
+
+Release-branch CI helpers:
 
 ```text
 runReleaseImages
-  reads the branch policy
-  selects the image for the released service
-  creates the release tag
-  calls runBuildImages
+  Parses release branch, selects the service image, tags it, and calls runBuildImages.
 
 runBuildImages
-  validates image config
-  runs docker build
-  runs docker save
-  writes image-artifacts/images.txt
-  archives the image tar and manifest files
+  Runs docker build, docker save, archives Docker tar files, writes images.txt.
+
+runTrivySBOM
+  Generates CycloneDX SBOMs from Docker archives and can upload to Dependency-Track.
+
+runTrivyScan
+  Scans Docker archives with Trivy image scan.
+
+markReleaseCiArtifact
+  Writes ci-success.txt after release branch CI reaches the end successfully.
 ```
 
-The Jenkinsfile declares project image metadata, for example:
+Manual release helpers:
+
+```text
+pushToRegistry
+  Loads Docker archives, retags them for GHCR, pushes, writes pushed-images.txt.
+
+updateGithub
+  Checks out a GitHub repo, patches a file, commits, locks, retries, and pushes.
+
+deployWithArgoHelm
+  Updates Helm values in Git; ArgoCD auto-sync deploys the change.
+
+deployWithHelm
+  Updates Helm values in Git, then runs helm upgrade.
+
+deployWithArgoKubectl
+  Updates raw manifests in Git; ArgoCD auto-sync deploys the change.
+
+deployWithKubectl
+  Updates raw manifests in Git, then runs kubectl apply.
+```
+
+Pod template helpers:
+
+```text
+ciLintPodTemplate
+releasePodTemplate
+ciPythonPodTemplate
+```
+
+`ciPythonPodTemplate()` is a backward-compatible alias for older Jenkinsfiles.
+New Jenkinsfiles should use `ciLintPodTemplate()`.
+
+---
+
+## 5. Current App CI Flow
+
+The application repository currently uses:
+
+```text
+App/Jenkinsfile
+```
+
+It runs on the CI agent:
 
 ```groovy
-def imageBuildConfig = [
-  outputDir: 'image-artifacts',
-  platform: 'linux/amd64',
-  images: [
-    [name: 'user-service', context: 'user-service', dockerfile: 'user-service/Dockerfile'],
-    [name: 'todo-service', context: 'todo-service', dockerfile: 'todo-service/Dockerfile'],
-    [name: 'frontend', context: 'frontend', dockerfile: 'frontend/Dockerfile']
-  ]
-]
+agent {
+  kubernetes {
+    yaml ciLintPodTemplate(images: imageBuildConfig.images)
+    defaultContainer 'jnlp'
+  }
+}
 ```
 
-This keeps the Shared Library project-agnostic. A monorepo can pass three
-images; a future single-service repository can pass only one image without
-changing the library code.
-
-Release branches use this format:
+Main Jenkins options:
 
 ```text
-release/<service>-v<version>
+buildDiscarder
+skipDefaultCheckout(true)
+timestamps()
+disableConcurrentBuilds()
+timeout(30 minutes)
+cleanWs in post
 ```
 
-For example:
+CI stages:
 
 ```text
-release/user-service-v1.0
+Checkout
+Linting
+Unit Tests
+Code Quality Analysis
+Prepare Security Scanner
+Static Security Scan
+Build Images              release/* only
+Generate Image SBOM       release/* only
+Image Security Scan       release/* only
+Mark Release CI Artifact  release/* only
 ```
 
-`runReleaseImages()` reads `env.BRANCH_NAME`, resolves the service as
-`user-service`, resolves the version as `v1.0`, reads the current short commit,
-and creates this tag:
+The first part runs for PR jobs and release branch jobs. The image artifact part
+runs only for `release/*` branches.
 
-```text
-<commit>-v1.0-staging
-```
+---
 
-So the final local image reference becomes:
+## 6. Linting
 
-```text
-user-service:<commit>-v1.0-staging
-```
+The linting stage runs three helpers in parallel.
 
-The archived tar file uses a filesystem-safe version of the same reference:
-
-```text
-image-artifacts/user-service_<commit>-v1.0-staging.docker.tar
-```
-
-`images.txt` is a small manifest file written next to the tar archives. It
-records which service was built, which image reference was used, where the tar
-file is, and which platform was targeted:
-
-```text
-user-service  user-service:<commit>-v1.0-staging  image-artifacts/user-service_<commit>-v1.0-staging.docker.tar  linux/amd64
-```
-
-This matters for later deploy pipelines. A staging deploy step can read
-`images.txt`, download the matching tar artifact, run `docker load`, tag it for
-the registry, and push it without guessing artifact names.
-
-Build output is archived with Jenkins' built-in `archiveArtifacts(...)` step.
-These image tar files are Jenkins build artifacts, not BuildKit artifacts. They
-are stored under Jenkins build history on `jenkins-home-pvc`. Retention is
-controlled from the Jenkinsfile with `buildDiscarder(...)`; in the current test
-setup only a small number of recent artifacts should remain.
-
-Image builds use the `docker` CLI container and the `docker-dind` sidecar over
-`DOCKER_HOST=tcp://localhost:2375`. This avoids mounting the host Docker socket,
-but the sidecar must run privileged. `runBuildImages()` intentionally does not
-allow Jenkinsfiles to override `dockerHost`, because the build must use only the
-pod-local Docker daemon.
-
-Docker layer cache is stored through the DinD sidecar's `/var/lib/docker`
-directory. Release branches mount a service-specific PVC such as
-`jenkins-docker-cache-user-service-pvc`, while non-release branches use an
-`emptyDir` cache because they do not build release images. Per-service PVCs avoid
-two independent Docker daemons writing to the same Docker data directory. The
-Docker cache PVCs use `ReadWriteOncePod`, so if two builds for the same service
-try to run at the same time, Kubernetes should block the second pod from mounting
-the same cache instead of letting two Docker daemons write to it. The cache can
-still grow as base images and dependency layers change, so keep an eye on the
-Longhorn volumes and prune/resize them when needed.
-
-Release branch parsing is shared by `ReleaseResolver` in `src/`. Both
-`ciLintPodTemplate()` and `runReleaseImages()` use the same resolver, so the pod
-mounts the same service cache that the build step later selects.
-
-The pod template chooses Docker cache storage before the Jenkins stages run:
-
-```text
-release/user-service-v1.0
-  -> jenkins-docker-cache-user-service-pvc
-
-release/todo-service-v1.0
-  -> jenkins-docker-cache-todo-service-pvc
-
-release/frontend-v1.0
-  -> jenkins-docker-cache-frontend-pvc
-
-PR/main/non-release branch
-  -> emptyDir cache
-```
-
-That timing is why a Jenkins `lock { ... }` inside the build stage is not enough
-to protect a shared `/var/lib/docker` PVC. By the time the stage starts, the pod
-has already mounted the volume and the Docker daemon may already be running.
-`ReadWriteOncePod` moves the protection to Kubernetes volume attachment time.
-
-## Registry Push Flow
-
-`pushToRegistry()` is used by manual release/deploy pipelines after image
-artifacts already exist. It does not build images. It reads the manifest written
-by `runBuildImages()` or copied from a previous CI build:
-
-```text
-image-artifacts/images.txt
-```
-
-Each row tells the helper:
-
-```text
-image name
-local image reference
-Docker archive path
-platform
-```
-
-The release pipeline can get these files in two ways:
-
-```text
-Use CI artifact from latest completed CI build
-  -> copyArtifacts(projectName: 'homelab-app-ci/<branch>', selector: lastCompleted())
-  -> image-artifacts/images.txt appears in the release job workspace
-  -> image-artifacts/<image>.docker.tar appears in the release job workspace
-  -> image-artifacts/ci-success.txt must exist
-
-Build fallback
-  -> runReleaseImages(...)
-  -> runBuildImages(...)
-  -> the same image-artifacts/images.txt and Docker tar files are created locally
-```
-
-Because both paths produce the same `image-artifacts/` layout, the push step
-does not care whether the image came from CI artifacts or was rebuilt inside the
-release job.
-
-Release jobs validate that the selected branch belongs to the service handled by
-the job. For example, `release-user-service` accepts
-`release/user-service-v<version>` and rejects `release/todo-service-v<version>`.
-The Jenkins UI also filters branches per service, but the Jenkinsfile validation
-is the real guardrail because UI filters should not be trusted as the only
-protection.
-
-Production releases require `USE_CI_ARTIFACT=true`. Fallback
-builds are allowed for staging, but production should promote an artifact that
-already passed the CI branch pipeline.
-
-The App CI pipeline calls `markReleaseCiArtifact()` only after release branch
-build, SBOM, and image scan stages complete successfully. That helper writes
-and archives `image-artifacts/ci-success.txt`. The release pipeline copies
-artifacts from the latest completed CI build and then requires that marker. If
-the latest CI build failed, the marker is missing and release stops instead of
-falling back to an older successful build.
-
-The release pipeline also checks that the commit embedded in `images.txt`
-matches the selected branch HEAD commit. This prevents promoting an artifact
-from an older commit after the release branch has moved.
-
-The helper then runs:
-
-```text
-docker load -i image-artifacts/<image>.docker.tar
-docker tag <local-ref> <registry-ref>
-docker push <registry-ref>
-```
-
-Example:
-
-```groovy
-pushToRegistry(
-  imageManifest: 'image-artifacts/images.txt',
-  registry: 'ghcr.io',
-  registryNamespace: 'keremar',
-  repositories: [
-    'user-service': 'todo-app-user-service'
-  ],
-  environment: params.DEPLOY_ENVIRONMENT,
-  branchName: env.SELECTED_BRANCH_NORMALIZED,
-  credentialsId: 'github-token'
-)
-```
-
-`branchName` keeps release policy inside the helper. When `branchName` is a
-`release/*` branch, the configured `environment` is applied to the pushed tag,
-for example:
-
-```text
-user-service:abc1234-v1.0-staging
-```
-
-When `branchName` is not a release branch, the helper keeps the source tag
-without appending `staging` or `prod`. This lets the same helper work for future
-non-release push flows without putting release policy logic in every
-Jenkinsfile.
-
-When a `repositories` map is supplied, every image in `images.txt` must have an
-explicit mapping. The helper does not fall back to pushing `image.name` as the
-registry repository in that case. This prevents a wrong copied artifact from
-being pushed by the wrong release job.
-
-`pushToRegistry()` writes and archives:
-
-```text
-image-artifacts/pushed-images.txt
-```
-
-That file records the source image ref, final registry ref, and archive path
-that were pushed.
-
-`updateGithub()` is intentionally split into a generic Git workflow plus small
-patch operations. The caller decides which repository file should change, while
-`updateGithub()` handles checkout, locking, commit, push, and retry behavior.
-The currently supported operations are:
-
-```text
-kubernetesContainerImage
-  updates the image: field for a named container in a Kubernetes manifest
-
-helmImageTag
-  updates image.tag in a Helm values file
-```
-
-This keeps deploy helpers project-specific and keeps `updateGithub()` reusable
-for any repository that needs the same safe Git update flow.
-
-When the release job `DEPLOY` parameter is selected, the final GitOps + Helm
-release flow runs `deployWithArgoHelm()` after the registry push:
-
-```text
-read image-artifacts/pushed-images.txt
-read the pushed image tag
-updateGithub takes a repository/branch lock
-updateGithub updates 6-Helm-Deploy/<service>/values-staging.yaml
-  or 6-Helm-Deploy/<service>/values-production.yaml
-updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
-ArgoCD detects the Git change
-ArgoCD renders the Helm chart
-ArgoCD syncs the matching Application into the cluster
-```
-
-The ArgoCD Helm helper does not need a kubeconfig and does not run
-`helm upgrade` or `kubectl apply`. It maps `DEPLOY_ENVIRONMENT=prod` to
-`values-production.yaml`, while the image tag may still keep the shorter `prod`
-suffix because that tag is produced earlier by `pushToRegistry()`.
-
-The lock matters when two release pipelines update the same config repository
-branch at the same time. Without it, both jobs can checkout the same old
-`main`, create different commits, and one push can be rejected because the
-remote branch moved. The retry protects the remaining edge case where something
-outside Jenkins updates the branch between checkout and push.
-
-If the direct kubectl deploy path is used instead, `deployWithKubectl()` runs
-after the registry push:
-
-```text
-read image-artifacts/pushed-images.txt
-updateGithub takes a repository/branch lock
-updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
-updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
-write kubeconfig from the Jenkins kubeconfig credential
-kubectl apply -f 3-Kubectl-Deploy/<environment>/<service>/templates
-```
-
-The direct kubectl helper uses the `kubernetes` container from
-`releasePodTemplate()`. It maps `DEPLOY_ENVIRONMENT=prod` to the Kubernetes
-namespace and manifest folder `production`, while the image tag keeps the
-shorter `prod` suffix.
-
-The release pod does not mount its Kubernetes ServiceAccount token. In the
-direct kubectl path, deploy permission comes from the Jenkins Secret Text
-credential named `kubeconfig`. In this setup that credential stores a base64
-encoded kubeconfig from `KUBECONFIG_B64`. Base64 is used because the kubeconfig
-moves through `.env`, `envsubst`, a Kubernetes Secret, Jenkins env, and JCasC as
-one line. It is not a Kubernetes `stringData` requirement. This keeps deploy
-authorization explicit and avoids giving the Jenkins pod ServiceAccount
-application namespace permissions by default.
-
-If the raw-manifest GitOps path is used instead, `deployWithArgoKubectl()`
-runs after the registry push:
-
-```text
-read image-artifacts/pushed-images.txt
-updateGithub takes a repository/branch lock
-updateGithub updates 3-Kubectl-Deploy/<environment>/<service>/templates/deployment.yaml
-updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
-ArgoCD detects the Git change
-ArgoCD syncs the matching Application
-```
-
-Keep `deployWithArgoKubectl()` for the pre-Helm GitOps phase where ArgoCD
-tracks plain Kubernetes manifests.
-
-If the transitional Helm deploy path is used, `deployWithHelm()` runs after the
-registry push:
-
-```text
-read image-artifacts/pushed-images.txt
-read the pushed image tag
-updateGithub takes a repository/branch lock
-updateGithub updates 6-Helm-Deploy/<service>/values-staging.yaml
-  or 6-Helm-Deploy/<service>/values-production.yaml
-updateGithub commits and pushes, retrying with fetch/rebase if the remote branch moved
-write kubeconfig from the Jenkins kubeconfig credential
-helm upgrade --install <namespace>-<service> 6-Helm-Deploy/<service>
-  --namespace <namespace>
-  --values 6-Helm-Deploy/<service>/values-<environment>.yaml
-```
-
-In this Helm flow the deployable desired state is the environment values file,
-not the raw Kubernetes `deployment.yaml` image field. `DEPLOY_ENVIRONMENT=prod`
-maps to namespace `production` and to `values-production.yaml`. The image tag
-itself may still contain the shorter `prod` suffix because that tag is produced
-earlier by `pushToRegistry()`.
-
-`takeOwnership` defaults to `false` for normal Helm releases. Set it to `true`
-only for the first adoption run when Helm must take over resources that already
-exist from the plain-manifest phase. After Helm owns the release, leaving
-`--take-ownership` on every deploy is unnecessary.
-
-`deployWithHelm()` still uses the same explicit kubeconfig credential model as
-`deployWithKubectl()`. The difference is the apply engine: Helm renders the
-chart and manages the release history, while kubectl applies a manifest
-directory directly.
-
-`pushToRegistry()` logs in with Jenkins credentials, pushes the image, then logs
-out and removes `$WORKSPACE/.docker` in a `finally` block. The release
-Jenkinsfile also runs `cleanWs(...)`, but the helper still cleans up its own
-registry auth files so it is safer when reused elsewhere.
-
-The release job intentionally avoids Jenkins internal API calls for CI result
-checks. The success marker and commit comparison are ordinary workspace artifact
-checks, so they do not require Script Approval. A future UI improvement can add
-an explicit `CI_BUILD_NUMBER` selector, but dynamic build dropdowns usually
-require extra plugins or Jenkins-side scripting.
-
-## Image Security Scan And SBOM
-
-Release branches run image security checks after `Build Images` because the
-scan target is the Docker archive produced by `docker save`, not a registry
-image.
-
-```text
-Build Images
-  -> image-artifacts/<image>.docker.tar
-  -> image-artifacts/images.txt
-
-Generate Image SBOM
-  -> runTrivySBOM(imageManifest: 'image-artifacts/images.txt')
-  -> trivy image --input image-artifacts/<image>.docker.tar --format cyclonedx
-  -> sbom-reports/<image>.cyclonedx.json
-  -> optional upload to Dependency-Track
-
-Image Security Scan
-  -> runTrivyScan(imageManifest: 'image-artifacts/images.txt')
-  -> trivy image --input image-artifacts/<image>.docker.tar
-  -> trivy-image-reports/<image>.trivy.txt
-  -> trivy-image-reports/<image>.trivy.json
-  -> optional vulnerability gate
-```
-
-`runTrivyScan()` and `runTrivySBOM()` both read `images.txt` by default. This
-keeps the image reference, archive path, service name, and platform aligned with
-the build step. Neither helper needs the image to be pushed to GHCR first.
-
-SBOM generation runs before the image vulnerability gate. This keeps the
-supply-chain artifact available even when the vulnerability policy later fails
-the build.
-
-Image vulnerability scans use the persistent Trivy DB cache directly:
-
-```text
-persistent cache
-  /home/jenkins/.cache/trivy
-```
-
-The persistent cache is updated by `ensureTrivyDB()` before scans begin. Image
-scans run with `--skip-db-update`, `--cache-dir /home/jenkins/.cache/trivy`,
-and `--cache-backend memory`. The PVC-backed cache provides the vulnerability
-DB, while Trivy's per-process scan cache stays in memory and avoids filesystem
-cache locking between parallel image scans. This replaces the older pattern of
-copying the whole Trivy cache into `/tmp/trivy-image-<uuid>` for every scan.
-
-Repository scans and image scans use different skip lists. Filesystem and
-secret scans receive repository-relative paths such as `frontend/node_modules`,
-`.venvs`, `.git`, and `coverage-reports`. Image scans receive image-internal
-paths such as `/app/tmp` only when there is a specific reason to skip something.
-In most builds `trivyImageSkipDirs` should stay empty.
-
-SBOM generation defaults to CycloneDX because Dependency-Track consumes
-CycloneDX natively. SBOM generation does not copy the Trivy vulnerability DB
-cache because it is not doing vulnerability scanning. It uses Trivy's memory
-cache backend for runtime state. Do not pass repository dependency skip dirs to
-SBOM generation: the point of SBOM is a complete image component inventory, so
-skipping `node_modules` or Python package directories can hide components from
-Dependency-Track. When
-`uploadToDependencyTrack: true`, `runTrivySBOM()` requires `format: 'cyclonedx'`
-and calls `uploadSBOMsToDependencyTrack()` with one project per image by default:
-
-```text
-projectName    = image name, e.g. user-service
-projectVersion = image tag, e.g. abc1234-v1.0-staging
-```
-
-The upload helper wraps the OWASP Dependency-Track Jenkins plugin's
-`dependencyTrackPublisher` step and passes the Jenkins Secret Text credential
-named `dependency-track-api-key` with `withCredentials`.
-
-The Jenkins pod template pins the `trivy` container to `aquasec/trivy:0.70.0`.
-This keeps SBOM generation compatible with the current Dependency-Track setup
-without requiring a separate CycloneDX conversion container.
-
-Project auto-creation is not passed as a Pipeline argument. Some installed
-versions of the Dependency-Track Jenkins plugin warn that `autoCreateProjects`
-is unknown. The helper sends `projectName` and `projectVersion`; creating missing
-projects must be enabled in the plugin/global configuration or handled manually
-in Dependency-Track.
-
-## How Python Linting Works
-
-Example Jenkinsfile usage:
+Python:
 
 ```groovy
 runPythonLinting(
@@ -629,210 +387,152 @@ runPythonLinting(
 )
 ```
 
-The helper receives this as a Groovy `Map` named `config`.
+Container:
 
-```groovy
-String containerName = config.container ?: 'python'
+```text
+python
 ```
 
-If the Jenkinsfile does not pass `container`, the helper uses the `python`
-container by default. Passing `container: 'custom-python'` would override it.
+Commands:
 
-```groovy
-List safeTargets = Validation.uniqueRelativePaths(targets, 'Python lint target')
+```text
+black --check .
+flake8 .
 ```
 
-This validates every target before Jenkins enters the directory. It rejects
-absolute paths, parent directory traversal, values starting with `-`, invalid
-characters, and duplicate targets. The result is called `safeTargets` because
-those paths are safe to pass to `dir()` and shell commands.
-
-The helper then creates a Jenkins `parallel` branch for each target:
+Frontend:
 
 ```groovy
-branches["Python lint: ${safeTarget}"] = {
-  container(containerName) {
-    if (!fileExists(safeTarget)) {
-      error "Python lint target does not exist: ${safeTarget}"
-    }
-
-    dir(safeTarget) {
-      sh(label: "Black: ${safeTarget}", script: 'black --check .')
-      sh(label: "Flake8: ${safeTarget}", script: 'flake8 .')
-    }
-  }
-}
+runNodeLinting(
+  packageDirs: ['frontend'],
+  lintScript: 'lint',
+  failFast: false
+)
 ```
 
-`branches` is a map where each key becomes a visible Jenkins parallel branch
-name. `sh(label: ..., script: ...)` gives the shell step a readable name in the
-Jenkins UI instead of showing only "Shell Script".
+Container:
 
-Finally, the helper runs all branches:
+```text
+node
+```
+
+Commands:
+
+```text
+npm ci --prefer-offline --no-audit
+npm run lint
+```
+
+Dockerfiles:
 
 ```groovy
-parallel branches + [failFast: failFast]
+runHadolint(
+  dockerfiles: [
+    'user-service/Dockerfile',
+    'todo-service/Dockerfile',
+    'frontend/Dockerfile'
+  ],
+  failFast: false
+)
 ```
 
-For linting, prefer `failFast: false` so one service failing lint does not hide
-lint errors from the other services in the same build.
+Container:
 
-## How Unit Testing Works
+```text
+hadolint
+```
 
-Example Jenkinsfile usage:
+For linting, `failFast: false` is preferred so one service failing lint does not
+hide lint findings from sibling branches in the same build.
+
+Project-specific lint rules stay in the application repo:
+
+```text
+pyproject.toml
+.flake8
+.hadolint.yaml
+package.json
+```
+
+---
+
+## 7. Unit Tests
+
+Usage:
 
 ```groovy
 runUnitTest(
-  services: [
-    [
-      name: 'user-service',
-      target: 'user-service',
-      requirementsFile: 'user-service/requirements-test.txt',
-      testPath: '.',
-      coverageThreshold: 70
-    ],
-    [
-      name: 'todo-service',
-      target: 'todo-service',
-      requirementsFile: 'todo-service/requirements-test.txt',
-      testPath: '.',
-      coverageThreshold: 75
-    ]
-  ],
+  services: unitTestServices,
   coverageDir: 'coverage-reports',
   failFast: false
 )
 ```
 
-`runUnitTest` intentionally accepts only `services` maps. This keeps the helper
-explicit: each service declares its requirements file, test path, and coverage
-config.
-
-Coverage behavior is maintained by each service in its own coverage.py config:
-
-```ini
-[run]
-relative_files = true
-source =
-    .
-
-[report]
-show_missing = true
-omit =
-    test_*.py
-    tests/*
-```
-
-`relative_files = true` helps coverage XML contain paths that are easier to
-reuse outside the Jenkins workspace. Since pytest runs from inside the service
-directory, `source = .` means "measure this service". Coverage thresholds are
-owned by the Jenkinsfile as service-level `coverageThreshold` values, because
-each service can mature at a different pace without editing every service config.
-
-After reading `services`, the helper validates repository-relative paths,
-checks for duplicate service names, and creates one Jenkins `parallel` branch
-per service.
-
-Each branch runs inside the `python` container and performs this flow:
+Container:
 
 ```text
-check service directory exists
-check test path exists
-check service requirements file exists
-check service .coveragerc exists
+python
+```
+
+Each service declares:
+
+```text
+name
+target
+requirementsFile
+testPath
+coverageThreshold
+```
+
+Current services:
+
+```text
+user-service -> coverageThreshold 70
+todo-service -> coverageThreshold 70
+```
+
+Unit test flow per service:
+
+```text
+validate service config
+validate service directory, test path, requirements file, .coveragerc
 delete old report directory
 create fresh report directory
-create a fresh venv under $WORKSPACE/.venvs
-install requirements using persistent pip cache inside a Jenkins lock
-run pytest from inside the service directory with COVERAGE_RCFILE
-publish junit.xml to Jenkins test results
-archive junit.xml and coverage.xml as build artifacts
-fail if tests passed but junit.xml is missing
-fail if tests passed but coverage.xml is missing
-fail the branch if pytest returned non-zero
+create fresh venv under $WORKSPACE/.venvs/<service>
+install requirements with persistent pip cache
+run pytest
+publish junit.xml with Jenkins junit step
+archive junit.xml and coverage.xml
+fail if pytest failed
+fail if expected reports are missing after a successful pytest run
 ```
 
-### Why Unit Test Has Helper Functions
-
-The unit test helper has more private helper functions than linting helpers
-because it manages a full test contract, not only a single command. Linting can
-mostly validate a path and run `black`, `flake8`, or `hadolint`; unit testing
-also needs service metadata, dependency files, coverage configuration,
-thresholds, report paths, cache paths, and Jenkins test publishing.
-
-The helper functions run in this order:
-
-```text
-cachePath
-lockName
-normalizeServices
-parsePositiveInteger
-parseRequiredInteger
-validateUniqueServiceNames
-validateServiceFiles
-```
-
-`cachePath` validates the pip cache path before it is passed into the shell. It
-matters only because `pipCacheDir` is configurable. If the helper always
-hard-coded `/cache/pip`, this function could be removed.
-
-`lockName` validates the Jenkins Lockable Resources name used around
-`pip install`. The default is `jenkins-pip-cache`. This keeps multiple Jenkins
-agent pods from writing to the same persistent pip cache at the same time.
-
-`normalizeServices` converts each Jenkinsfile service map into one consistent
-internal structure. It fills defaults such as `target`, `testPath`,
-`coverageConfig`, `requirementsFile`, and `reportName`. Without it, the main
-pipeline code would need to repeat that defaulting logic inline, or every
-Jenkinsfile would need to provide every field perfectly.
-
-`parsePositiveInteger` validates retry counts such as `pipInstallRetries`.
-Without it, a typo such as `0` or a non-numeric value could disable retry
-behavior or fail later with a less clear Jenkins error.
-
-`parseRequiredInteger` is called while services are normalized and makes
-`coverageThreshold` explicit and safe. Without it, empty, non-numeric, or
-out-of-range values could produce confusing pytest errors, or accidentally
-remove the coverage gate.
-
-`validateUniqueServiceNames` prevents duplicate service names before Jenkins
-parallel branches are created. Without it, two services with the same name could
-overwrite each other in the `parallel` map and also collide on report and venv
-directories such as `coverage-reports/<service>` and `.venvs/<service>`.
-
-`validateServiceFiles` checks that the service directory, test path,
-requirements file, and service `.coveragerc` exist before running expensive
-commands. Without it, the build would usually still fail, but later and with
-less useful errors from `pip`, `pytest`, or missing report files.
-
-These checks are mostly guardrails, but they prevent silent CI mistakes. The
-most important ones to keep are service normalization, duplicate service
-detection, file existence checks, and coverage threshold validation.
-
-The venv is intentionally ephemeral:
+The venv is ephemeral:
 
 ```text
 $WORKSPACE/.venvs/<service>
 ```
 
-Only pip's download/wheel cache is persistent:
+The pip download/wheel cache is persistent:
 
 ```text
 /cache/pip
 ```
 
-This avoids sharing executable environments between jobs while still speeding up
-dependency installation.
-The Python runner image must not set `PIP_NO_CACHE_DIR=1`; the helper explicitly
-sets `PIP_CACHE_DIR` and passes `--cache-dir` to `pip install`.
+That path is backed by `jenkins-venv-cache-pvc`. The helper sets `PIP_CACHE_DIR`
+and calls `pip install --cache-dir /cache/pip`.
 
-Because `/cache/pip` is a shared PVC-backed cache, dependency installation is
-wrapped with `lock(resource: 'jenkins-pip-cache')`. This does not serialize the
-whole unit test stage: venv creation and pytest can still run per service, but
-the cache-writing `pip install` step is protected. The install step is also
-retried twice by default for transient PyPI, network, or cache read errors.
+The pip install step is wrapped with:
 
-The pytest command produces two important files per service:
+```groovy
+lock(resource: 'jenkins-pip-cache')
+```
+
+This protects the shared pip cache from concurrent writes by multiple Jenkins
+agent pods. It does not serialize the whole test stage; only the cache-writing
+install section is locked.
+
+Reports:
 
 ```text
 coverage-reports/user-service/junit.xml
@@ -841,122 +541,38 @@ coverage-reports/todo-service/junit.xml
 coverage-reports/todo-service/coverage.xml
 ```
 
-`pytest` is the step that actually runs the tests:
+`junit(...)` is a Jenkins Pipeline step. It does not run tests; it reads the
+`junit.xml` produced by pytest and adds test results to the Jenkins UI.
 
-```bash
-cd "$WORKSPACE"
-
-python -m pytest user-service \
-  --junitxml=coverage-reports/user-service/junit.xml \
-  --cov=user-service \
-  --cov-report=xml:coverage-reports/user-service/coverage.xml \
-  --cov-report=term-missing \
-  --cov-fail-under=70
-```
-
-The helper runs pytest from the workspace root, not from inside the service
-directory. This makes coverage XML paths repository-relative, such as
-`user-service/app.py`, so SonarQube can match them to scanned source files.
+`archiveArtifacts(...)` is also a Jenkins Pipeline step. It stores the report
+files on the build page.
 
 Coverage has two different files:
 
 ```text
 .coverage
-  coverage.py's raw data file written while tests are running
+  raw coverage.py data file
 
 coverage.xml
-  final XML report generated from the raw data and passed to SonarQube
+  XML report consumed by Jenkins artifacts and SonarQube
 ```
 
-The XML reports were already service-specific:
+Because unit tests run in parallel, the helper sets a per-service
+`COVERAGE_FILE` through `withEnv`:
 
 ```text
-coverage-reports/user-service/coverage.xml
-coverage-reports/todo-service/coverage.xml
+coverage-reports/user-service/.coverage
+coverage-reports/todo-service/.coverage
 ```
 
-However, coverage.py uses `$WORKSPACE/.coverage` by default for raw data. Since
-unit tests run in parallel, both service branches could write to the same raw
-data file and one service's XML report could accidentally include files from
-the other service.
+This prevents parallel test branches from writing to the same raw coverage data
+file.
 
-To prevent that, the helper sets `COVERAGE_FILE` through Jenkins `withEnv`, so
-each service gets its own raw coverage data file before the shell step starts:
+---
 
-```groovy
-withEnv([
-    "COVERAGE_FILE=${env.WORKSPACE}/${reportDir}/.coverage"
-])
-```
+## 8. SonarQube
 
-That produces this isolated flow:
-
-```text
-user-service tests
-  -> coverage-reports/user-service/.coverage
-  -> coverage-reports/user-service/coverage.xml
-
-todo-service tests
-  -> coverage-reports/todo-service/.coverage
-  -> coverage-reports/todo-service/coverage.xml
-```
-
-The coverage threshold comes from that service's Jenkinsfile
-`coverageThreshold` value. `runUnitTest` does not accept a top-level coverage
-threshold; every service declares its own threshold.
-
-The Jenkins `junit(...)` step does not run tests. It reads the `junit.xml` file
-that pytest already created and adds a Test Result section to the Jenkins build.
-It is a built-in Jenkins Pipeline step provided by Jenkins' test reporting
-support:
-
-```groovy
-junit(
-  allowEmptyResults: false,
-  testResults: "${reportDir}/junit.xml"
-)
-```
-
-The helper only calls `junit(...)` when the file exists. If tests pass but
-`junit.xml` is missing, the helper fails the build because that means the test
-reporting contract is broken.
-
-The Jenkins `archiveArtifacts(...)` step stores report files on the build page
-so they can be downloaded later or reused by later integrations. It is also a
-built-in Jenkins Pipeline step:
-
-```groovy
-archiveArtifacts(
-  allowEmptyArchive: true,
-  artifacts: "${reportDir}/*.xml"
-)
-```
-
-`coverage.xml` is kept because SonarQube can use it later for coverage import.
-`junit.xml` is kept because Jenkins uses it for test history and UI reporting.
-
-`allowEmptyArchive: true` avoids masking the real pytest failure with a
-secondary "archive file not found" error. `allowEmptyResults` is intentionally
-`false` when `junit(...)` is called, so Jenkins does not silently accept a
-missing or empty test report.
-
-The helper still fails the branch explicitly:
-
-```groovy
-if (status != 0) {
-  error "Unit tests failed for ${service.name}"
-}
-```
-
-## How SonarQube Analysis Works
-
-`runSonarQube` is the Shared Library wrapper around Jenkins' SonarQube plugin
-and scanner tool. SonarQube itself runs in the cluster and stores analysis
-results, issues, quality gates, and coverage data. The scanner runs inside the
-Jenkins pipeline and sends the current workspace analysis to the SonarQube
-server.
-
-Example Jenkinsfile usage:
+Usage:
 
 ```groovy
 runSonarQube(
@@ -967,365 +583,911 @@ runSonarQube(
     'coverage-reports/todo-service/coverage.xml'
   ],
   fetchIssues: true,
-  fetchIssuesConfig: [
-    severities: ['BLOCKER', 'CRITICAL', 'MAJOR'],
-    statuses: ['OPEN', 'CONFIRMED'],
-    maxIssues: 100
+  fetchIssuesConfig: issueFetchConfig,
+  extraProperties: [
+    'sonar.python.version': '3.11'
   ],
-  cpdExclusions: [
-    '**/tests/**'
-  ],
-  container: 'sonar'
+  inNewCodePeriod: newCodeIssues,
+  container: 'sonar',
+  abortPipeline: false
 )
 ```
 
-The helper uses these Jenkins-side objects:
+Container:
+
+```text
+sonar
+```
+
+Jenkins plugin steps used:
 
 ```text
 withSonarQubeEnv('sonarqube')
-  injects SonarQube URL and token from Jenkins Global Configuration
-
 tool 'SonarQube Scanner'
-  resolves the Jenkins-managed sonar-scanner installation
-
 waitForQualityGate
-  waits for SonarQube's webhook response after analysis
 ```
 
-The scanner itself runs in the configured `sonar` container because it needs a
-JRE and can use meaningful memory while analyzing JavaScript and Python files.
-`waitForQualityGate` runs after the scanner step as a Jenkins Pipeline step; it
-does not need the scanner container or an executor-heavy shell process.
+`withSonarQubeEnv` injects SonarQube URL and token from Jenkins Global
+Configuration. `tool` resolves the Jenkins-managed scanner installation.
+`waitForQualityGate` waits for SonarQube to finish processing the uploaded
+analysis.
 
-The helper generates `sonar-project.properties` in the workspace before running
-the scanner. It owns generic properties such as `sonar.projectKey`,
-`sonar.sources`, `sonar.exclusions`, `sonar.python.coverage.reportPaths`, and
-`sonar.cpd.exclusions`. If a project needs extra SonarQube settings, pass them
-through `extraProperties`; do not hardcode project-specific rules in the Shared
-Library.
+The helper writes `sonar-project.properties` into the workspace before running
+the scanner. Common properties have direct helper parameters. Less common
+project-specific properties can be passed through `extraProperties`.
 
-Coverage reports come from the earlier `runUnitTest` stage:
+Security-sensitive properties are blocked from `extraProperties`, including:
 
 ```text
-coverage-reports/user-service/coverage.xml
-coverage-reports/todo-service/coverage.xml
+sonar.token
+sonar.login
+sonar.password
+sonar.host.url
+sonar.projectBaseDir
+sonar.working.directory
+sonar.userHome
+sonar.scanner.*
 ```
 
-By default, configured coverage reports must exist. This catches a broken test
-or report path before SonarQube analysis runs without coverage.
-
-`runSonarQube` can also call `fetchSonarQubeIssues` when `fetchIssues: true` is
-set. This is diagnostic: it archives the SonarQube issue API response and prints
-a short summary in the Jenkins log. It does not replace Quality Gate
-enforcement. Issue fetch runs only after the scanner has submitted analysis and
-`waitForQualityGate` has completed. If `waitForQualityGate: false`, issue fetch
-is skipped because SonarQube processes scanner uploads asynchronously and the
-API could otherwise return stale issues from a previous analysis.
-
-SonarQube properties are passed in two ways. Common properties have dedicated
-parameters:
-
-```groovy
-runSonarQube(
-  projectKey: 'homelab-app',
-  sources: ['.'],
-  exclusions: [
-    '**/node_modules/**',
-    '**/test/**',
-    '**/test_*.py',
-    'docker-compose*.yml',
-    'site/**',
-    'docs/**',
-    'custom-images/**'
-  ],
-  coverageReports: [
-    'coverage-reports/user-service/coverage.xml',
-    'coverage-reports/todo-service/coverage.xml'
-  ],
-  cpdExclusions: [
-    '**/verify_token',
-    '**/*service/app.py'
-  ]
-)
-```
-
-Less common or project-specific properties go into `extraProperties`:
-
-```groovy
-runSonarQube(
-  projectKey: 'homelab-app',
-  sources: ['.'],
-  extraProperties: [
-    'sonar.issue.ignore.multicriteria': 'e1,e2',
-    'sonar.issue.ignore.multicriteria.e1.ruleKey': 'docker:S6471',
-    'sonar.issue.ignore.multicriteria.e1.resourceKey': '**/frontend/Dockerfile',
-    'sonar.issue.ignore.multicriteria.e2.ruleKey': 'docker:S4507',
-    'sonar.issue.ignore.multicriteria.e2.resourceKey': '**/custom-images/**'
-  ]
-)
-```
-
-The helper writes these values into `sonar-project.properties` before running
-`sonar-scanner`.
-
-Security-sensitive properties cannot be passed through `extraProperties`.
-Examples include `sonar.token`, `sonar.login`, `sonar.password`,
-`sonar.host.url`, `sonar.projectBaseDir`, `sonar.working.directory`,
-`sonar.userHome`, and `sonar.scanner.*`. Credentials and server URLs must come
-from Jenkins' SonarQube Global Configuration through `withSonarQubeEnv`.
-
-### Why SonarQube Has Helper Functions
-
-The SonarQube helper has several private functions because it builds a
-configuration file and passes user-provided values into scanner commands. The
-extra functions keep the main `call` flow readable and make invalid Jenkinsfile
-configuration fail before the scanner starts.
-
-The helper functions run in this order:
+Branch issue policy is owned by the application Jenkinsfile:
 
 ```text
-normalizeConfig
-validateProjectKey
-asList
-Validation.uniqueRelativePaths / Validation.uniqueSafeGlobs
-normalizeExtraProperties
-validateInputFiles
-writeSonarProperties
-parsePositiveInteger
-joinCsv
+release/* branch
+  fetch project-level issues
+
+everything else
+  fetch new-code issues with inNewCodePeriod: true
 ```
 
-`normalizeConfig` is the main adapter between the Jenkinsfile and the internal
-settings map. It fills defaults such as `scannerName: 'SonarQube Scanner'`,
-`serverName: 'sonarqube'`, `propertiesFile: 'sonar-project.properties'`, and
-`timeoutMinutes: 15`. Without it, the main pipeline flow would be full of
-defaulting and validation code.
+`fetchSonarQubeIssues` is diagnostic. It calls SonarQube's issue API after the
+scanner upload and Quality Gate wait. It archives `sonarqube-issues.json` and
+prints a compact summary. The real pass/fail contract remains the Quality Gate.
 
-`validateProjectKey` checks that `projectKey` exists and only contains safe
-SonarQube project key characters. Without it, a typo or unsafe value would fail
-later inside the scanner with a less useful error.
+`abortPipeline: false` means a failed Quality Gate marks the build unstable
+instead of failing the whole Pipeline.
 
-`asList` lets callers pass either a single value or a list for list-like
-settings. For example, `sources: 'frontend'` becomes `['frontend']`. Without it,
-a single string could be treated like an unexpected collection shape.
+---
 
-`Validation.uniqueRelativePaths` is used for source paths and coverage reports.
-It rejects absolute paths, parent directory traversal, values starting with
-`-`, invalid characters, and duplicates. Without it, a bad Jenkinsfile path
-could scan the wrong place, fail late, or overwrite another value.
+## 9. Static Security Scan
 
-`Validation.uniqueSafeGlobs` is used for SonarQube glob settings such as
-`exclusions`, `cpdExclusions`, and `testInclusions`. It keeps glob patterns
-repository-relative. Without it, project config could accidentally point outside
-the workspace or pass option-looking values.
+The static security stages run after SonarQube.
 
-`normalizeExtraProperties` validates optional custom `sonar.*` properties. It
-also blocks properties that already have first-class helper parameters, such as
-`sonar.sources` or `sonar.projectKey`, and security-sensitive properties such as
-`sonar.token` or `sonar.host.url`. Without it, the same property could be
-defined twice, point analysis at an unexpected server/path, or write credentials
-into `sonar-project.properties`.
-
-`validatePropertyKey`, `validatePropertyValue`, and `validatePlainValue` protect
-the generated `sonar-project.properties` file. They reject invalid property
-keys and multiline values. Without them, a value containing a newline could
-silently inject another SonarQube property.
-
-`validateInputFiles` checks configured source paths and required coverage
-reports before the scanner runs. Without it, SonarQube could run successfully
-but miss coverage because a report path was wrong.
-
-`writeSonarProperties` creates the actual `sonar-project.properties` file that
-`sonar-scanner` reads. Without it, every Jenkinsfile would need to maintain its
-own SonarQube properties file or inline scanner flags.
-
-`parsePositiveInteger` validates the timeout value. Without it, an empty,
-negative, or very large timeout could create confusing Jenkins behavior.
-
-`defaultExclusions`, `managedPropertyKeys`, and `joinCsv` are small support
-functions. They keep default ignore patterns, protected property names,
-security-sensitive property names, and comma-separated SonarQube values in one
-place.
-
-`fetchSonarQubeIssues` calls SonarQube's `/api/issues/search` endpoint after
-analysis and Quality Gate completion. It stores the raw JSON as
-`sonarqube-issues.json`, archives it as a Jenkins artifact, and prints a compact
-issue summary. It uses Bearer authentication from `withSonarQubeEnv`.
-
-Branch, pull request, and new-code filters are intentionally not enabled
-automatically inside the Shared Library. The application Jenkinsfile owns that
-policy. In the current homelab flow, only `release/*` branches keep
-project-level issue fetch; every other branch or PR requests
-`inNewCodePeriod: true` so the issue summary focuses on new-code issues. Do not
-pass `branch` or `pullRequest` unless the SonarQube project is explicitly
-configured for that analysis mode; otherwise the API can query a branch context
-that the scanner did not actually analyze.
-
-The fetch helper is useful when you want quick feedback directly in Jenkins
-logs, especially after a Quality Gate failure. It should stay diagnostic. The
-main pass/fail contract remains:
-
-```text
-scanner sends analysis
-SonarQube evaluates Quality Gate
-waitForQualityGate fails or passes the build
-Jenkins links back to SonarQube for issue details
-```
-
-When `abortPipeline: false`, the helper still logs the Quality Gate status. If
-the status is not `OK`, the build is marked `UNSTABLE` instead of failing.
-
-## How Static Security Scanning Works
-
-The application repository runs source-level security scans after unit tests:
+First:
 
 ```groovy
-stage('Prepare Security Scanner') {
-  steps {
-    ensureTrivyDB()
-  }
-}
-
-stage('Static Security Scan') {
-  parallel {
-    stage('Dependencies') {
-      steps {
-        runTrivyFSScan(
-          target: '.',
-          skipDirs: securityConfig.trivyFsSkipDirs,
-          failOnVulnerabilities: true
-        )
-      }
-    }
-
-    stage('Secrets') {
-      steps {
-        runTrivySecretScan(
-          target: '.',
-          skipDirs: securityConfig.trivyFsSkipDirs,
-          failOnSecrets: true
-        )
-      }
-    }
-  }
-}
+ensureTrivyDB()
 ```
 
-The helpers run directly in the Jenkins agent pod's `trivy` container. They do
-not use Docker-in-Docker or `docker run`.
+Container:
 
-`ensureTrivyDB()` prepares the persistent Trivy database cache:
+```text
+trivy
+```
+
+Cache:
 
 ```text
 /home/jenkins/.cache/trivy
 ```
 
-This path is backed by `jenkins-trivy-cache-pvc`, so the DB survives across
-short-lived Jenkins agent pods. `ensureTrivyDB()` runs Trivy's DB update command
-on every pipeline run and lets Trivy decide whether the local DB is already
-fresh. If the DB is current, Trivy reuses it. If it is stale or missing, Trivy
-updates it. When the DB is updated, the same source code can start failing if a
-new CVE is added for one of its dependencies.
+That path is backed by `jenkins-trivy-cache-pvc`.
 
-DB updates are wrapped with Jenkins' Lockable Resources Plugin:
+`ensureTrivyDB()` wraps Trivy DB update with:
 
 ```groovy
-lock(resource: 'trivy-db-cache') {
-  trivy image --download-db-only ...
-}
+lock(resource: 'trivy-db-cache')
 ```
 
-This means concurrent Jenkins jobs share the same PVC cache safely: one job
-updates the DB while the others wait for the Jenkins lock instead of racing on
-the same cache files. The Jenkins controller must have the `lockable-resources`
-plugin installed for this helper.
+This lets concurrent Jenkins jobs share the same Trivy DB PVC without racing on
+DB update files.
 
-Scans use the persistent Trivy DB cache directly and keep the runtime scan cache
-in memory:
+Then source-level scans run in parallel.
 
-```text
-persistent PVC cache
-  /home/jenkins/.cache/trivy
-```
-
-The vulnerability and IaC helpers run Trivy with `--skip-db-update`,
-`--cache-dir`, and `--cache-backend memory`:
-
-```bash
-trivy fs \
-  --skip-db-update \
-  --cache-dir /home/jenkins/.cache/trivy \
-  --cache-backend memory \
-  ...
-```
-
-This keeps DB update/write behavior out of scan steps. The PVC-backed cache is
-the shared source of truth for the vulnerability DB, and each Trivy process uses
-its own in-memory scan cache. There is no temporary cache directory to clean up.
-
-Secret scanning does not use the Trivy vulnerability DB. It scans source files
-with built-in secret rules, so `runTrivySecretScan` does not create an isolated
-cache and does not use `--skip-db-update`.
-
-`runTrivyFSScan` scans dependency manifests and lock files for vulnerabilities:
+Dependency/filesystem scan:
 
 ```groovy
 runTrivyFSScan(
   target: '.',
-  severities: 'HIGH,CRITICAL',
+  skipDirs: securityConfig.trivyFsSkipDirs,
   filePatterns: ['pip:requirements-.*\\.txt'],
   includeDevDeps: true,
   failOnVulnerabilities: true
 )
 ```
 
-The `filePatterns` option is important for this repo because backend services
-use `requirements-test.txt`; Trivy's default pip discovery focuses on standard
-requirements filenames. `includeDevDeps: true` includes frontend development and
-build-time dependencies from npm lock files.
-
-`failOnVulnerabilities` controls Trivy's `--exit-code`:
-
-```text
-true  -> findings at the selected severities return exit code 1 and fail Jenkins
-false -> findings are reported, but Trivy returns exit code 0
-```
-
-`runTrivySecretScan` scans source files for committed secrets:
+Secret scan:
 
 ```groovy
 runTrivySecretScan(
   target: '.',
-  severities: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL',
+  skipDirs: securityConfig.trivyFsSkipDirs,
   failOnSecrets: true
 )
 ```
 
-Secret scan defaults include all severities, because even low-severity secret
-findings should be reviewed.
+Repository scan skip paths are repository-relative:
 
-`runTrivyIaCscan` exists for repositories that contain Kubernetes manifests,
-Helm charts, Terraform, or similar infrastructure files. The app source repo no
-longer calls it because manifests now live in a separate infrastructure/config
-repository. Use it in that repo instead:
+```text
+frontend/node_modules
+node_modules
+.venvs
+.venv
+venv
+__pycache__
+.git
+coverage-reports
+```
+
+`runTrivyFSScan` uses `--skip-db-update`, `--cache-dir`, and
+`--cache-backend memory`. The DB comes from the persistent PVC cache; each scan
+process keeps runtime cache in memory.
+
+`runTrivySecretScan` does not need the vulnerability DB because it uses secret
+rules instead of vulnerability matching.
+
+`runTrivyIaCscan` exists for repositories that own infrastructure manifests,
+Helm charts, Terraform, Compose files, or similar IaC. The app repository does
+not call it because manifests and Helm charts live in the infrastructure repo.
+
+---
+
+## 10. Release-Branch CI Artifacts
+
+Only `release/*` branch builds run the image artifact stages.
+
+Current release branch stages:
+
+```text
+Build Images
+Generate Image SBOM
+Image Security Scan
+Mark Release CI Artifact
+```
+
+### Build Images
+
+Usage:
 
 ```groovy
-runTrivyIaCscan(
-  targets: ['3-DeployWithManifests', 'helm-charts/manifests'],
-  failOnIssues: true
+runReleaseImages(
+  images: imageBuildConfig.images,
+  outputDir: 'image-artifacts',
+  platform: 'linux/amd64',
+  environment: 'staging',
+  failFast: false
 )
 ```
 
-For the application repo, the static security stage should normally include:
+`runReleaseImages()` applies the Homelab release branch convention:
 
 ```text
-ensureTrivyDB
-runTrivyFSScan
-runTrivySecretScan
+release/<service>-v<version>
 ```
 
-For the infrastructure/config repo, add:
+Example:
 
 ```text
-runTrivyIaCscan
+release/todo-service-v1.1
 ```
+
+The helper parses:
+
+```text
+service = todo-service
+version = v1.1
+```
+
+Then it builds only the image that belongs to that service, even if the
+Jenkinsfile passes a list of all monorepo images.
+
+Tag format:
+
+```text
+<commit>-v<version>-<environment>
+```
+
+Example:
+
+```text
+todo-service:5ca78aa-v1.1-staging
+```
+
+`runReleaseImages()` delegates the actual build to `runBuildImages()`.
+
+`runBuildImages()`:
+
+```text
+validates image config
+waits for pod-local Docker daemon
+runs docker build
+runs docker save
+writes image-artifacts/images.txt
+archives image-artifacts/*.docker.tar and images.txt
+sets env.BUILT_IMAGE_ARCHIVES
+sets env.BUILT_IMAGE_REFS
+```
+
+It uses the `docker` container connected to `docker-dind`:
+
+```text
+DOCKER_HOST=tcp://localhost:2375
+```
+
+The library intentionally does not allow Jenkinsfiles to override `dockerHost`.
+The build must use only the pod-local Docker daemon.
+
+### Image Manifest
+
+`images.txt` is the contract between build, scan, push, and deploy helpers.
+
+Format:
+
+```text
+<image-name>  <local-image-ref>  <archive-path>  <platform>
+```
+
+Example:
+
+```text
+todo-service  todo-service:5ca78aa-v1.1-staging  image-artifacts/todo-service_5ca78aa-v1.1-staging.docker.tar  linux/amd64
+```
+
+This file lets later helpers know exactly which tar file belongs to which image
+without guessing filenames.
+
+### Generate Image SBOM
+
+Usage:
+
+```groovy
+runTrivySBOM(
+  imageManifest: 'image-artifacts/images.txt',
+  outputDir: 'sbom-reports',
+  format: 'cyclonedx',
+  uploadToDependencyTrack: false,
+  failFast: false
+)
+```
+
+Container:
+
+```text
+trivy
+```
+
+Input:
+
+```text
+image-artifacts/<image>.docker.tar
+```
+
+Output:
+
+```text
+sbom-reports/<image>.cyclonedx.json
+sbom-reports/sboms.txt
+```
+
+SBOM generation runs before the image vulnerability gate so the supply-chain
+artifact is still available even if the scan later reports vulnerabilities.
+
+SBOM generation uses Trivy's memory cache backend. It does not need the Trivy
+vulnerability DB because CycloneDX SBOM generation is component inventory, not
+vulnerability matching.
+
+If `uploadToDependencyTrack: true`, the helper calls
+`uploadSBOMsToDependencyTrack()`, which wraps the Dependency-Track Jenkins
+plugin step:
+
+```text
+dependencyTrackPublisher
+```
+
+The Trivy container is pinned to:
+
+```text
+aquasec/trivy:0.70.0
+```
+
+This keeps generated CycloneDX output compatible with the current
+Dependency-Track setup.
+
+### Image Security Scan
+
+Usage:
+
+```groovy
+runTrivyScan(
+  imageManifest: 'image-artifacts/images.txt',
+  outputDir: 'trivy-image-reports',
+  severities: 'HIGH,CRITICAL',
+  failOnVulnerabilities: false,
+  skipDirs: securityConfig.trivyImageSkipDirs,
+  failFast: false
+)
+```
+
+Input:
+
+```text
+image-artifacts/<image>.docker.tar
+```
+
+Output:
+
+```text
+trivy-image-reports/<image>.trivy.txt
+trivy-image-reports/<image>.trivy.json
+```
+
+Image scan skip paths are image-internal paths. They are intentionally separate
+from repository scan skip paths. In the current app Jenkinsfile,
+`trivyImageSkipDirs` is empty.
+
+`failOnVulnerabilities` controls Trivy's exit code:
+
+```text
+true
+  selected severity findings fail the Jenkins build
+
+false
+  findings are reported and archived, but the build can continue
+```
+
+### Mark Release CI Artifact
+
+Usage:
+
+```groovy
+markReleaseCiArtifact(
+  outputDir: 'image-artifacts'
+)
+```
+
+This writes:
+
+```text
+image-artifacts/ci-success.txt
+```
+
+Example content:
+
+```text
+branch=release/todo-service-v1.1
+commit=5ca78aa
+build=12
+```
+
+The marker is archived as a Jenkins artifact. Manual release jobs require this
+marker when they reuse CI artifacts. If the latest completed CI build failed
+before this marker stage, release stops instead of silently promoting an older
+successful build.
+
+---
+
+## 11. Manual Release Flow
+
+Manual release jobs are defined by Jenkins JCasC but load their Pipeline from:
+
+```text
+pipelines/release/Jenkinsfile
+```
+
+Current jobs:
+
+```text
+release-user-service
+release-todo-service
+release-frontend
+```
+
+User parameters:
+
+```text
+RELEASE_BRANCH
+DEPLOY_ENVIRONMENT
+USE_CI_ARTIFACT
+DEPLOY
+```
+
+Release stages:
+
+```text
+Resolve CI Artifact
+Checkout Selected Branch
+Copy CI Image Artifact
+Validate CI Image Artifact
+Build Image Fallback
+Push to Registry
+Deploy with ArgoCD Helm
+```
+
+### Resolve CI Artifact
+
+The release Jenkinsfile resolves service config from the Jenkins job name:
+
+```text
+release-user-service -> user-service
+release-todo-service -> todo-service
+release-frontend     -> frontend
+```
+
+It validates that the selected branch belongs to that service:
+
+```text
+release/user-service-v<version>
+release/todo-service-v<version>
+release/frontend-v<version>
+```
+
+Production releases require `USE_CI_ARTIFACT=true`. Fallback rebuilds are
+allowed for non-prod release jobs only.
+
+The release job also writes a build description:
+
+```text
+User: <user> / env: <env> / deploy: <true|false> / branch: <branch> / service: <service> / mode: <ci-artifact|self-build>
+```
+
+This uses the Build User Vars plugin through `withBuildUser()`.
+
+### Checkout Selected Branch
+
+The release job checks out the selected app branch and records:
+
+```text
+SELECTED_BRANCH_COMMIT
+SELECTED_BRANCH_SHORT_COMMIT
+```
+
+This commit is later compared with the image artifact commit.
+
+### Copy And Validate CI Artifact
+
+When `USE_CI_ARTIFACT=true`, the release job uses the Copy Artifact plugin:
+
+```groovy
+copyArtifacts(
+  projectName: env.CI_JOB_FULL_NAME,
+  selector: lastCompleted(),
+  filter: 'image-artifacts/**',
+  fingerprintArtifacts: true
+)
+```
+
+This copies:
+
+```text
+image-artifacts/images.txt
+image-artifacts/<image>.docker.tar
+image-artifacts/ci-success.txt
+```
+
+Validation then checks:
+
+```text
+ci-success.txt exists
+images.txt contains the selected service
+image tag commit matches selected branch HEAD commit
+```
+
+The job deliberately uses the latest completed CI build plus the
+`ci-success.txt` marker. If the latest completed build failed before the marker,
+release fails. It does not silently fall back to an older successful build.
+
+### Build Image Fallback
+
+When `USE_CI_ARTIFACT=false`, the release job builds the selected service image
+itself:
+
+```groovy
+runReleaseImages(
+  images: releaseImages(),
+  branchName: env.SELECTED_BRANCH_NORMALIZED,
+  outputDir: 'image-artifacts',
+  platform: 'linux/amd64',
+  environment: params.DEPLOY_ENVIRONMENT,
+  failFast: false
+)
+```
+
+This fallback path exists for staging convenience. It is blocked for production.
+
+### Push To Registry
+
+Usage:
+
+```groovy
+pushToRegistry(
+  imageManifest: 'image-artifacts/images.txt',
+  registry: 'ghcr.io',
+  registryNamespace: 'keremar',
+  repositories: registryRepositories(),
+  environment: params.DEPLOY_ENVIRONMENT,
+  branchName: env.SELECTED_BRANCH_NORMALIZED,
+  credentialsId: 'github-token'
+)
+```
+
+Container:
+
+```text
+docker
+```
+
+Flow:
+
+```text
+read image-artifacts/images.txt
+docker load image-artifacts/<image>.docker.tar
+rewrite tag environment when branch is release/*
+docker tag local image to registry image
+docker login with github-token
+docker push
+docker logout and remove workspace Docker auth
+write image-artifacts/pushed-images.txt
+archive pushed-images.txt
+```
+
+Example `pushed-images.txt` row:
+
+```text
+todo-service  todo-service:5ca78aa-v1.1-staging  ghcr.io/keremar/todo-app-todo-service:5ca78aa-v1.1-staging  image-artifacts/todo-service_5ca78aa-v1.1-staging.docker.tar
+```
+
+Fields:
+
+```text
+logical image name
+local image reference loaded from Docker archive
+final registry image reference
+source archive path
+```
+
+### Deploy With ArgoCD Helm
+
+Current preferred deploy helper:
+
+```groovy
+deployWithArgoHelm(
+  service: service.name,
+  environment: params.DEPLOY_ENVIRONMENT,
+  pushedManifest: 'image-artifacts/pushed-images.txt',
+  configRepoUrl: 'https://github.com/KeremAR/Homelab-Infrastructure.git',
+  configRepoBranch: 'main',
+  helmRoot: '6-Helm-Deploy',
+  credentialsId: 'github-token'
+)
+```
+
+Flow:
+
+```text
+read pushed image from pushed-images.txt
+extract image tag
+call updateGithub
+update 6-Helm-Deploy/<service>/values-staging.yaml
+  or 6-Helm-Deploy/<service>/values-production.yaml
+commit and push Homelab-Infrastructure
+ArgoCD notices Git change
+ArgoCD syncs Helm Application
+```
+
+`deployWithArgoHelm()` does not run `helm upgrade` and does not run
+`kubectl apply`. The cluster deployment is performed by ArgoCD.
+
+Other deploy helpers still exist for transitional paths:
+
+```text
+deployWithHelm
+  Updates Helm values and runs helm upgrade directly with kubeconfig.
+
+deployWithArgoKubectl
+  Updates raw manifests and lets ArgoCD sync plain YAML.
+
+deployWithKubectl
+  Updates raw manifests and runs kubectl apply directly with kubeconfig.
+```
+
+---
+
+## 12. updateGithub
+
+`updateGithub()` is the generic safe Git update helper used by deploy helpers.
+
+It handles:
+
+```text
+checkout config repository
+patch one file according to operation
+show git diff
+commit
+push
+lock repo/branch updates
+retry rejected pushes with fetch/rebase
+restore remote URL after credentials are used
+```
+
+Supported operations:
+
+```text
+kubernetesContainerImage
+  Updates the image field for a named container in a Kubernetes manifest.
+
+helmImageTag
+  Updates top-level image.tag in a Helm values file.
+```
+
+The lock is important when two release jobs update the same config repository
+branch at the same time. It serializes Jenkins-side pushes. The retry handles
+the remaining case where something outside Jenkins updates the branch between
+checkout and push.
+
+---
+
+## 13. Validators
+
+Reusable libraries validate user-provided config before passing values into
+`dir()`, `sh`, Git commands, Docker commands, Trivy commands, or generated
+properties files.
+
+### Validation
+
+Class:
+
+```text
+src/com/company/jenkins/Validation.groovy
+```
+
+Used for generic paths, globs, npm script names, and shell quoting.
+
+Important behavior:
+
+```text
+repository-relative paths only
+no absolute paths
+no parent directory traversal
+no values starting with '-'
+restricted character sets
+duplicate list detection
+single-quote shell escaping
+```
+
+Why this matters:
+
+```text
+wrong path should fail before Jenkins dir() creates an empty directory
+CLI option-looking values should not become command flags
+duplicate parallel branch names should not overwrite each other
+generated config files should not receive injected multiline values
+```
+
+### TrivyValidation
+
+Class:
+
+```text
+src/com/company/jenkins/TrivyValidation.groovy
+```
+
+Used for:
+
+```text
+severity lists
+timeouts
+cache paths
+file patterns
+repository skip paths
+image-internal skip paths
+```
+
+Repository skip paths and image skip paths are intentionally different:
+
+```text
+repository scan skip path
+  frontend/node_modules
+
+image scan skip path
+  /app/tmp
+```
+
+Most image scans should keep skip paths empty so SBOM and image vulnerability
+scans see the real image contents.
+
+### ReleaseResolver
+
+Class:
+
+```text
+src/com/company/jenkins/ReleaseResolver.groovy
+```
+
+Used by:
+
+```text
+ciLintPodTemplate
+runReleaseImages
+```
+
+It keeps release branch parsing consistent:
+
+```text
+release/<service>-v<version>
+```
+
+This matters because the pod template chooses the Docker cache PVC before
+stages run, while `runReleaseImages()` chooses which service image to build
+during the stage. Both must resolve the same service.
+
+### ImageArtifactManifest
+
+Class:
+
+```text
+src/com/company/jenkins/ImageArtifactManifest.groovy
+```
+
+Used by image scan, SBOM, and push helpers to parse image artifact manifests.
+
+It keeps this format consistent:
+
+```text
+image-artifacts/images.txt
+image-artifacts/pushed-images.txt
+sbom-reports/sboms.txt
+```
+
+---
+
+## 14. Jenkins Plugins Used By The Library
+
+```text
+Kubernetes plugin
+  Provides agent { kubernetes { ... } } and container('name').
+
+Credentials Binding plugin
+  Provides withCredentials for GitHub, Dependency-Track, and kubeconfig.
+
+Lockable Resources plugin
+  Provides lock() for Trivy DB, pip cache, and Git update serialization.
+
+SonarQube plugin
+  Provides withSonarQubeEnv, SonarScanner tool config, and waitForQualityGate.
+
+Dependency-Track plugin
+  Provides dependencyTrackPublisher for CycloneDX SBOM upload.
+
+Copy Artifact plugin
+  Provides copyArtifacts for manual release jobs to reuse CI image artifacts.
+
+Build User Vars plugin
+  Provides build user variables for release build descriptions.
+
+JUnit / test reporting
+  Provides junit(...) for pytest JUnit XML files.
+
+Core Pipeline artifact support
+  Provides archiveArtifacts(...).
+```
+
+---
+
+## 15. Artifact Contracts
+
+Coverage reports:
+
+```text
+coverage-reports/<service>/junit.xml
+coverage-reports/<service>/coverage.xml
+```
+
+Image build manifest:
+
+```text
+image-artifacts/images.txt
+```
+
+Image archive:
+
+```text
+image-artifacts/<image-ref-safe>.docker.tar
+```
+
+Release CI success marker:
+
+```text
+image-artifacts/ci-success.txt
+```
+
+Pushed image manifest:
+
+```text
+image-artifacts/pushed-images.txt
+```
+
+SBOM manifest:
+
+```text
+sbom-reports/sboms.txt
+```
+
+Trivy image reports:
+
+```text
+trivy-image-reports/<image>.trivy.txt
+trivy-image-reports/<image>.trivy.json
+```
+
+SonarQube issue fetch:
+
+```text
+sonarqube-issues.json
+```
+
+These files are deliberately plain text or XML/JSON artifacts so later jobs can
+reuse them without calling Jenkins internal APIs.
+
+---
+
+## 16. Adding A New Project
+
+For a new repository, keep project-specific policy in the Jenkinsfile and reuse
+the helpers.
+
+Define lint targets:
+
+```groovy
+def lintConfig = [
+  pythonTargets: ['service-a'],
+  nodePackageDirs: ['frontend'],
+  dockerfiles: ['service-a/Dockerfile']
+]
+```
+
+Define unit test services:
+
+```groovy
+def unitTestServices = [
+  [
+    name: 'service-a',
+    target: 'service-a',
+    requirementsFile: 'service-a/requirements-test.txt',
+    testPath: '.',
+    coverageThreshold: 70
+  ]
+]
+```
+
+Define image metadata:
+
+```groovy
+def imageBuildConfig = [
+  outputDir: 'image-artifacts',
+  platform: 'linux/amd64',
+  images: [
+    [
+      name: 'service-a',
+      context: 'service-a',
+      dockerfile: 'service-a/Dockerfile'
+    ]
+  ]
+]
+```
+
+The library stays project-agnostic because the Jenkinsfile supplies paths,
+services, Dockerfiles, coverage thresholds, registry repository names, and
+deployment repository paths.
+
+---
+
+## 17. Global Variable Reference
+
+Most `vars/*.groovy` files have matching `vars/*.txt` files. Jenkins renders
+those `.txt` files under:
+
+```text
+Pipeline Syntax -> Global Variable Reference
+```
+
+Keep the `.txt` files short and parameter-focused. Use this README for the
+end-to-end flow and design explanation.
