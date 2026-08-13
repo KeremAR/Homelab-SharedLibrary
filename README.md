@@ -64,7 +64,7 @@ The library provides two Kubernetes agent pod templates.
 
 ### CI Agent
 
-Library step:
+Pod template function:
 
 ```groovy
 ciLintPodTemplate(...)
@@ -169,7 +169,7 @@ no host Docker socket mount
 
 ### Release Agent
 
-Library step:
+Pod template function:
 
 ```groovy
 releasePodTemplate(...)
@@ -218,16 +218,6 @@ archived image layers into the Docker daemon before `docker tag` and
 at `/var/lib/docker`, so fallback builds can reuse cache and `ReadWriteOncePod`
 can make a CI job and release job for the same service wait instead of sharing
 one Docker data directory.
-
-Docker operations:
-
-```text
-docker load
-docker tag
-docker login
-docker push
-fallback docker build
-```
 
 `kubernetes` uses:
 
@@ -317,7 +307,7 @@ deployWithKubectl
   Updates raw manifests in Git, then runs kubectl apply.
 ```
 
-Pod template library steps:
+Pod template functions:
 
 ```text
 ciLintPodTemplate
@@ -493,11 +483,8 @@ runUnitTest(
 )
 ```
 
-Container:
-
-```text
-python
-```
+`runUnitTest` runs in the `python` container by default. The `container`
+parameter can override this when another pod template uses a different name.
 
 Each service declares:
 
@@ -696,11 +683,8 @@ runSonarQube(
 )
 ```
 
-Container:
-
-```text
-sonar
-```
+`runSonarQube` runs in the `sonar` container by default because SonarScanner is
+Java based and can use meaningful memory during analysis.
 
 Parameters:
 
@@ -838,19 +822,8 @@ lockResource
   Lockable Resources name for DB updates. Default: trivy-db-cache.
 ```
 
-Container:
-
-```text
-trivy
-```
-
-Cache:
-
-```text
-/home/jenkins/.cache/trivy
-```
-
-That path is backed by `jenkins-trivy-cache-pvc`.
+`ensureTrivyDB` runs in the `trivy` container by default. Its default cache
+directory is `/home/jenkins/.cache/trivy`, backed by `jenkins-trivy-cache-pvc`.
 
 `ensureTrivyDB()` wraps Trivy DB update with:
 
@@ -1172,11 +1145,7 @@ runTrivySBOM(
 )
 ```
 
-Container:
-
-```text
-trivy
-```
+`runTrivySBOM` runs in the `trivy` container by default.
 
 Input:
 
@@ -1520,11 +1489,7 @@ pushToRegistry(
 )
 ```
 
-Container:
-
-```text
-docker
-```
+`pushToRegistry` runs in the `docker` container by default.
 
 Flow:
 
