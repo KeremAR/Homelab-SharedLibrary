@@ -366,6 +366,74 @@ runs only for `release/*` branches.
 
 ---
 
+## GitOps Repository Model
+
+The release library steps assume two separate Git repositories with different
+responsibilities.
+
+```text
+homelab-gitops
+  ArgoCD Application topology.
+  Defines root-app / App of Apps structure.
+  Tells ArgoCD which Application should watch which repository path.
+
+Homelab-Infrastructure
+  Actual desired state.
+  Contains plain Kubernetes manifests, Helm charts, and environment values.
+  Jenkins updates this repository when a release changes an image tag.
+```
+
+In the current Helm GitOps flow:
+
+```text
+homelab-gitops
+  argocd-helm/root-application.yaml
+    -> creates environment-level Applications
+    -> creates service-level Applications
+    -> service Applications watch Homelab-Infrastructure/6-Helm-Deploy/<service>
+
+Homelab-Infrastructure
+  6-Helm-Deploy/<service>/values-staging.yaml
+  6-Helm-Deploy/<service>/values-production.yaml
+```
+
+Jenkins does not directly modify `homelab-gitops` during a normal release.
+Jenkins updates the image tag in `Homelab-Infrastructure`; ArgoCD already knows
+which paths to watch because that topology lives in `homelab-gitops`.
+
+---
+
+## Build Once, Promote Same Artifact
+
+The central release decision is:
+
+```text
+CI builds and validates a Docker archive.
+Production release promotes that exact archive.
+Production does not rebuild source code.
+```
+
+This matters for reproducibility and security. If production rebuilt the source
+later, the result could differ because of base image changes, dependency
+resolution, registry state, or Dockerfile behavior. Promoting the archive that
+CI already built and scanned keeps the deployed artifact tied to the CI result.
+
+Environment behavior:
+
+```text
+staging
+  Convenience fallback rebuild is allowed when USE_CI_ARTIFACT=false.
+
+prod
+  CI artifact is required. Fallback rebuild is blocked.
+```
+
+For production, the tag can change from `staging` to `prod`, but the image is
+not rebuilt from source. The release job loads the archived image, retags it for
+the target registry/environment, and pushes it.
+
+---
+
 ## Linting
 
 The linting stage runs three library steps in parallel.
@@ -1218,6 +1286,61 @@ aquasec/trivy:0.70.0
 This keeps generated CycloneDX output compatible with the current
 Dependency-Track setup.
 
+### Dependency-Track Upload
+
+Dependency-Track upload is optional and disabled by default:
+
+```text
+uploadToDependencyTrack: false
+```
+
+When enabled, the flow is:
+
+```text
+runTrivySBOM
+  -> generate CycloneDX SBOM
+  -> uploadSBOMsToDependencyTrack
+  -> dependencyTrackPublisher
+  -> Dependency-Track API
+```
+
+Dependency-Track upload requires CycloneDX:
+
+```text
+uploadToDependencyTrack=true
+format must be cyclonedx
+```
+
+The upload library step uses Jenkins Secret Text credential:
+
+```text
+dependency-track-api-key
+```
+
+`uploadSBOMsToDependencyTrack` parameters:
+
+```text
+sboms
+  Required list of [file, projectName, projectVersion] maps.
+
+dependencyTrackUrl
+  Dependency-Track API server URL.
+  Default: http://dtrack-dependency-track-api-server.dependency-track.svc.cluster.local:8080.
+
+credentialsId
+  Jenkins Secret Text credential id. Default: dependency-track-api-key.
+
+synchronous
+  Wait for Dependency-Track processing result. Default: false.
+
+failOnUploadError
+  Fail Jenkins when upload fails. Default: true.
+```
+
+The library does not pass `autoCreateProjects` to the Jenkins plugin because
+some installed plugin versions do not support that Pipeline parameter. Missing
+project behavior should be handled by Dependency-Track/plugin configuration.
+
 ### Image Security Scan
 
 Usage:
@@ -1455,6 +1578,22 @@ The job deliberately uses the latest completed CI build plus the
 `ci-success.txt` marker. If the latest completed build failed before the marker,
 release fails. It does not silently fall back to an older successful build.
 
+Example:
+
+```text
+commit A -> CI SUCCESS
+commit B -> CI FAILURE
+```
+
+If the release job used `lastSuccessful()`, Jenkins could return commit A and a
+release could accidentally promote an old artifact while the branch HEAD is
+commit B.
+
+With the current `lastCompleted()` selector, Jenkins selects commit B. Because
+that failed CI run did not archive `ci-success.txt`, the release stops. The
+selected artifact must also match the selected branch HEAD commit, so an older
+archive cannot be promoted after the branch moves.
+
 ### Build Image Fallback
 
 When `USE_CI_ARTIFACT=false`, the release job builds the selected service image
@@ -1519,9 +1658,11 @@ registryNamespace
 
 repositories
   Map from logical image name to registry repository name.
+  When non-empty, every image must have an explicit mapping.
+  Missing mappings fail the release.
 
 repositoryPrefix
-  Optional fallback prefix when repositories does not contain an image name.
+  Used only when no repositories map is supplied.
 
 environment
   Optional release tag environment, such as staging or prod.
@@ -1675,10 +1816,12 @@ commitMessage
   Optional commit message. A default is generated when omitted.
 
 lockResource
-  Base lock name. Default: github-update.
+  Optional lock override. By default the lock is derived from repository and
+  branch: github-update-<repo>-<branch>.
 
-retries
-  Push retry count for remote branch movement. Default: 3.
+maxPushRetries
+  Maximum Git push attempts after fetch/rebase when the remote branch moved.
+  Default: 3.
 
 containerName / image / imageTag
   Operation-specific values used to patch the selected file.
@@ -1843,7 +1986,7 @@ Release push and deploy library steps:
 
 ```text
 pushToRegistry
-  ImageArtifactManifest.read    -> reads image-artifacts/images.txt.
+  ImageArtifactManifest.parse   -> parses image-artifacts/images.txt.
   normalizeRepositories         -> validates repository map.
   validateUniqueTargets         -> prevents pushing the same target twice.
   rewriteEnvironmentTag         -> rewrites release tags for staging/prod.
@@ -1966,13 +2109,26 @@ src/com/company/jenkins/ImageArtifactManifest.groovy
 
 Used by image scan, SBOM, and push library steps to parse image artifact manifests.
 
-It keeps this format consistent:
+It is specifically for the build artifact manifest:
 
 ```text
 image-artifacts/images.txt
-image-artifacts/pushed-images.txt
-sbom-reports/sboms.txt
 ```
+
+The contract is one tab-separated row per built image:
+
+```text
+<image-name>  <local-image-ref>  <archive-path>  <platform>
+```
+
+Main method:
+
+```groovy
+ImageArtifactManifest.parse(...)
+```
+
+`image-artifacts/pushed-images.txt` and `sbom-reports/sboms.txt` are separate
+contracts written by `pushToRegistry()` and `runTrivySBOM()`.
 
 ---
 
